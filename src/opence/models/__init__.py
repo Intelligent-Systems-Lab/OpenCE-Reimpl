@@ -12,6 +12,7 @@ from .providers import (
     TransformersModelProvider,
     RWKVModelProvider,
     DummyModelProvider,
+    OpenAIModelProvider,
 )
 from .rwkv_client import RWKVLLMClient
 
@@ -26,4 +27,5 @@ __all__ = [
     "TransformersModelProvider",
     "RWKVModelProvider",
     "DummyModelProvider",
+    "OpenAIModelProvider",
 ]

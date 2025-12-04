@@ -2,7 +2,7 @@
 
 from .playbook import Bullet, Playbook
 from .delta import DeltaOperation, DeltaBatch
-from opence.models.clients import LLMClient, DummyLLMClient, TransformersLLMClient
+from opence.models.clients import LLMClient, DummyLLMClient, TransformersLLMClient, OpenAIClient
 from .roles import (
     Generator,
     Reflector,
@@ -28,6 +28,7 @@ __all__ = [
     "LLMClient",
     "DummyLLMClient",
     "TransformersLLMClient",
+    "OpenAIClient",
     "Generator",
     "Reflector",
     "Curator",

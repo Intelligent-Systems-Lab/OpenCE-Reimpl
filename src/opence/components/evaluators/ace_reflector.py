@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict
 
 from ...methods.ace.playbook import Playbook
-from ...methods.ace.roles import GeneratorOutput, Reflector, ReflectorOutput
+from ...methods.ace.roles import GeneratorOutput, Reflector
 from ...interfaces import (
     ContextBundle,
     EvaluationSignal,

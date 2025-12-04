@@ -209,3 +209,41 @@ class DeepseekLLMClient(LLMClient):
             stream=False
         )
         return LLMResponse(text=response.choices[0].message.content)
+    
+class OpenAIClient(LLMClient):
+    def __init__(self,
+                 model: str = "4o-mini",
+                 api_key: Optional[str] = None,
+                 base_url: str = "https://api.openai.com/v1",
+                 system_prompt: str = None,
+                ) -> None:
+        super().__init__(model=model)
+        try:
+            from openai import OpenAI
+        except ImportError as e:
+            raise ImportError(
+                "请先安装OpenAI库:\n"
+                "  pip install openai\n"
+                "或:\n"
+                "  pip install openai>=1.0.0"
+            ) from e
+        load_dotenv()
+        self._system_prompt = system_prompt or (
+            "You are a JSON-only assistant that MUST reply with a single valid JSON object without extra text.\n"
+            "Reasoning: low\n"
+            "Do not expose analysis or chain-of-thought. Respond using the final JSON only."
+        )
+        if not api_key:
+            api_key = os.getenv("OPENAI_API_KEY")
+        self.client = OpenAI(base_url=base_url, api_key=api_key)
+
+    def complete(self, prompt: str, **kwargs: Any) -> LLMResponse:
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": self._system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            stream=False
+        )
+        return LLMResponse(text=response.choices[0].message.content)
