@@ -98,15 +98,25 @@ def main():
 
     test_code ="print(\"Hello, AppWorld!\")"
     
+    
     for i, payload in enumerate(test_payloads):
         print(f"\n嘗試格式 {i+1}: {payload}")
+        json_payload = {
+            "task_id": payload["task_id"],
+            "code": test_code
+        }
+        print(json_payload)
         try:
-            r = client.post("/execute", json={"task_id": payload["task_id"], "code": test_code})
+            r = client.post("/execute", json=json_payload)
             print(f"  狀態碼: {r.status_code}")
             print(f"  回應: {r.text}")
             
             if r.status_code == 200:
                 print("  ✅ 成功!")
+            
+            response = client.post("/close_all", json={"task_id": payload["task_id"]})
+            print(f"關閉任務狀態碼: {response.status_code}")
+            print(f"關閉任務回應: {response.text}")
         except Exception as e:
             print(f"  ❌ 失敗: {e}")
     
