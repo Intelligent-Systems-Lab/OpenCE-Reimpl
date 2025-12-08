@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -14,9 +15,79 @@ from .prompts import CURATOR_PROMPT, GENERATOR_PROMPT, REFLECTOR_PROMPT
 
 
 def _safe_json_loads(text: str) -> Dict[str, Any]:
+    """
+    Parse JSON configuration content from agent responses
+
+    Automatically handles multiple common wrapping formats in priority order:
+    1. <json_output> XML tag format
+    2. Markdown code block format (```json or ```)
+    3. Raw JSON object pattern matching
+
+    For non-string inputs, attempts to serialize to JSON format.
+
+    Args:
+        response_text: Agent response text that may contain embedded JSON configuration
+
+    Returns:
+        dict: Configuration dictionary when parsing succeeds, empty dict {} when parsing fails
+
+    Note:
+        This function is designed for fault tolerance - it will not raise exceptions
+        even when parsing fails, instead returning an empty dict to ensure system stability.
+    """
+    # If input is not a string, try to use it directly
+    if not isinstance(text, str):
+        try:
+            # If it's a dictionary, try to serialize to JSON
+            return json.dumps(repr(text), ensure_ascii=False, indent=4)
+        except:
+            raise ValueError("Input is not a string and cannot be serialized to JSON.")
+
+    # First check XML tag format
+    xml_pattern = re.compile(r'<json_output>(.*?)</json_output>', re.DOTALL)
+    xml_match = xml_pattern.search(text)
+
+    if xml_match:
+        extracted_json_text  = xml_match.group(1).strip()
+        print(f"\nJSON found in XML tags: {extracted_json_text}\n")
+        try:
+            data = json.loads(extracted_json_text)
+            return data
+        except json.JSONDecodeError as e:
+            print(f"\nJSONDecodeError in XML content: {e}\n")
+            # If XML tag content is invalid, continue trying other methods
+
+        if not isinstance(data, dict):
+            raise ValueError("Expected a JSON object from LLM.")
+        return data
+    
+    # Remove Markdown code block markers (backward compatibility)
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+
+    if text.endswith("```"):
+        text = text[:-3]
+
+    # Remove extra blank lines
+    text = text.strip()
+
+    # Find valid JSON object
+    # Find content from first { to matching last }
+    json_object_pattern  = re.compile(r'({.*})', re.DOTALL)
+    json_match  = json_object_pattern.search(text)
+
+    if not json_match :
+        return {}
+
+    extracted_json_text = json_match.group(1)
+    print(f"\nPotential JSON found: {extracted_json_text}\n")
+    # Validate if it's valid JSON
     try:
-        data = json.loads(text)
+        data = json.loads(extracted_json_text)
     except json.JSONDecodeError as exc:
+        print(f"\nJSONDecodeError: {exc}\n")
         debug_path = Path("logs/json_failures.log")
         debug_path.parent.mkdir(parents=True, exist_ok=True)
         with debug_path.open("a", encoding="utf-8") as fh:
@@ -24,10 +95,10 @@ def _safe_json_loads(text: str) -> Dict[str, Any]:
             fh.write(repr(text))
             fh.write("\n")
         raise ValueError(f"LLM response is not valid JSON: {exc}\n{text}") from exc
+    
     if not isinstance(data, dict):
         raise ValueError("Expected a JSON object from LLM.")
     return data
-
 
 def _format_optional(value: Optional[str]) -> str:
     return value or "(none)"
