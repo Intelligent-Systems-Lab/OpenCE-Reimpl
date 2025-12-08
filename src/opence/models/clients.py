@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 import json
 from collections import deque
 from dataclasses import dataclass
+import re
 from typing import Any, Deque, Dict, Optional, Union
 
 from dotenv import load_dotenv
@@ -244,6 +245,14 @@ class OpenAIClient(LLMClient):
                 {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": prompt},
             ],
-            stream=False
+            stream=False,
         )
-        return LLMResponse(text=response.choices[0].message.content)
+        raw_content = response.choices[0].message.content
+        
+        if self.model.startswith("deepseek-r1"):
+            print("--- 原始內容 (含思考) ---")
+            print(raw_content[:100] + "...") # 只印前100字示意
+            raw_content = re.sub(r'<think>.*?</think>', '', raw_content, flags=re.DOTALL).strip()
+            print("\n--- 過濾後的最終答案 ---")
+            print(raw_content)
+        return LLMResponse(text=raw_content)
