@@ -1,0 +1,499 @@
+"""AppWorld-specific adaptation loops for offline and online ACE training.
+
+This module extends the base adaptation framework to work with AppWorld's specific
+requirements. The key difference is that AppWorldGenerator requires different parameters
+(task, user info) instead of (question, context).
+
+User information (first_name, last_name, email, phone) is stored in sample.metadata.
+"""
+
+from __future__ import annotations
+
+from typing import Iterable, List, Optional, Sequence
+import re
+
+from src.opence.methods.ace.adaptation import (
+    AdapterBase,
+    AdapterStepResult,
+    EnvironmentResult,
+    Sample,
+    TaskEnvironment,
+)
+from src.opence.methods.ace.deduplication import Deduplicator
+from src.opence.methods.ace.playbook import Playbook
+from appworld_experiment.appworld_roles import (
+    AppWorldGenerator,
+    AppWorldReflector,
+    AppWorldCurator,
+)
+from appworld_experiment.trajectory import Trajectory
+
+class AppWorldAdapterBase(AdapterBase):
+    """Shared orchestration logic for AppWorld offline and online adaptation.
+
+    This base class overrides _process_sample to call AppWorldGenerator with
+    task-specific parameters instead of question/context.
+    """
+
+    def __init__(
+        self,
+        *,
+        playbook: Optional[Playbook] = None,
+        generator: AppWorldGenerator,
+        reflector: AppWorldReflector,
+        curator: AppWorldCurator,
+        max_refinement_rounds: int = 1,
+        reflection_window: int = 3,
+        max_interaction_steps: int = 10,
+        logger=None,
+    ) -> None:
+        """Initialize AppWorld adapter with AppWorld-specific roles.
+
+        Args:
+            playbook: Initial playbook (creates empty if None)
+            generator: AppWorldGenerator instance
+            reflector: AppWorldReflector instance
+            curator: AppWorldCurator instance
+            max_refinement_rounds: Number of reflector refinement rounds
+            reflection_window: Number of recent reflections to maintain
+            max_interaction_steps: Maximum number of agent-environment interaction steps
+            logger: Optional ExperimentLogger for tracking metrics
+        """
+        # Pass AppWorld roles to base class (they inherit from base roles)
+        super().__init__(
+            playbook=playbook,
+            generator=generator,
+            reflector=reflector,
+            curator=curator,
+            max_refinement_rounds=max_refinement_rounds,
+            reflection_window=reflection_window,
+        )
+        self.max_interaction_steps = max_interaction_steps
+        self.logger = logger
+
+    def extract_code(self, text: str) -> str:
+        """
+        Extracts the Python code snippet from a Markdown-formatted LLM response.
+
+        This method specifically targets code blocks enclosed in ```python ... ``` tags.
+        It uses regular expressions to robustly handle variations in whitespace and
+        newlines that often occur in LLM outputs.
+
+        Args:
+            text (str): The raw text response containing the Markdown code block.
+
+        Returns:
+            str: The extracted and cleaned Python code. If no specific ```python
+                block is found, it returns the original text stripped of leading/trailing
+                whitespace.
+
+        Example:
+            >>> raw_text = "Here is the code: ```python\\nprint('Hello')\\n```\\n"
+            >>> extract_code(raw_text)
+            "print('Hello')"
+        """
+        # Define the regex pattern to match Python code blocks.
+        # Breakdown of r"```python\s+(.*?)```":
+        #   ```python : Matches the literal starting tag.
+        #   \s+       : Matches one or more whitespace characters (including \n) immediately following the tag.
+        #   (.*?)     : Non-greedy capture group to match everything inside the block.
+        #   ```       : Matches the literal closing tag.
+        pattern = r"```python\s+(.*?)```"
+
+        # Search for the pattern within the input text.
+        # re.DOTALL is essential here; it allows the '.' character to match newlines,
+        # enabling the extraction of multi-line code blocks.
+        match = re.search(pattern, text, re.DOTALL)
+
+        if match:
+            # If a match is found, extract the captured content (group 1).
+            # .strip() is used to remove any residual whitespace or newlines 
+            # that might exist at the start or end of the captured string.
+            return match.group(1).strip()
+
+        # Fallback: If no formatted code block is found, return the clean original text.
+        return text.strip()
+    
+    def _extract_user_info(self, sample: Sample) -> dict:
+        """Extract user information from sample.metadata.
+
+        Args:
+            sample: Sample with metadata containing supervisor info
+
+        Returns:
+            Dictionary with user information fields
+        """
+        metadata = sample.metadata or {}
+        return {
+            "main_user_first_name": metadata.get("first_name", ""),
+            "main_user_last_name": metadata.get("last_name", ""),
+            "main_user_email": metadata.get("email", ""),
+            "main_user_phone_number": metadata.get("phone_number", ""),
+        }
+
+    def _process_sample(
+        self,
+        sample: Sample,
+        environment: TaskEnvironment,
+        *,
+        epoch: int,
+        total_epochs: int,
+        step_index: int,
+        total_steps: int,
+    ) -> AdapterStepResult:
+        """Process a single AppWorld sample through multi-step interaction.
+
+        This implements a multi-step agent-environment interaction loop where
+        the Generator produces code step-by-step, receives observations from
+        the Environment, and continues until task completion or max steps.
+
+        Args:
+            sample: Sample to process (AppWorldSample with metadata)
+            environment: Task environment for evaluation
+            epoch: Current epoch number
+            total_epochs: Total number of epochs
+            step_index: Current step index in epoch
+            total_steps: Total number of steps in epoch
+
+        Returns:
+            AdapterStepResult containing all outputs from the pipeline
+        """
+        import time
+        start_time = time.time()
+
+        # Log task start
+        if self.logger:
+            self.logger.log_task_start(
+                task_id=getattr(sample, 'task_id', f'sample_{step_index}'),
+                sample_index=step_index,
+                epoch=epoch
+            )
+
+        # Extract user info from metadata
+        user_info = self._extract_user_info(sample)
+
+        # Initialize trajectory
+        trajectory = Trajectory(task=sample.question, steps=[])
+
+        # Initialize task in environment
+        environment.initialize_task(sample)
+
+        # Multi-step interaction loop
+        is_completed = False
+        final_generator_output = None
+
+        for interaction_step in range(1, self.max_interaction_steps + 1):
+            print(f"\n{'='*60}")
+            print(f"Interaction Step {interaction_step}/{self.max_interaction_steps}")
+            print(f"{'='*60}\n")
+
+            # Format trajectory history for generator
+            trajectory_history = trajectory.format_for_reflector() if trajectory.steps else ""
+
+            # Generate next step
+            generator_output = self.generator.generate(
+                task=sample.question,
+                playbook=self.playbook,
+                main_user_first_name=user_info["main_user_first_name"],
+                main_user_last_name=user_info["main_user_last_name"],
+                main_user_email=user_info["main_user_email"],
+                main_user_phone_number=user_info["main_user_phone_number"],
+                trajectory_history=trajectory_history,
+            )
+
+            # Execute code in environment
+            code = generator_output.final_answer
+            exec_result = environment.execute_code(sample.task_id, self.extract_code(code))
+
+            # Format observation
+            observation = f"Output: {exec_result.get('output', '')}\n"
+
+            # Add step to trajectory
+            trajectory.add_step(
+                reasoning=generator_output.reasoning,
+                bullet_ids=generator_output.bullet_ids,
+                code=code,
+                observation=observation,
+            )
+
+            # Check if task is completed via environment API
+            if environment.is_task_completed(sample.task_id):
+                print("\n✓ Task completion detected by environment")
+                is_completed = True
+                final_generator_output = generator_output
+                break
+
+            final_generator_output = generator_output
+
+        # Get final task status
+        task_status = environment.check_task_completion(sample.task_id)
+        trajectory.is_completed = task_status.get("output", False) or is_completed
+
+        # Get unit test results
+        unit_test_result = environment.evaluate_task(sample.task_id)
+        unit_test_output = unit_test_result.get("output", "(no unit test output)")
+
+        # Parse unit test results for TGC calculation
+        from appworld_experiment.experiment_logger import parse_unit_test_results
+        unit_tests_passed, unit_tests_total = parse_unit_test_results(unit_test_output)
+        tgc = unit_tests_passed / unit_tests_total if unit_tests_total > 0 else 0.0
+
+        # Close task
+        environment.close_task(sample.task_id)
+
+        # Store trajectory in sample.context for later use
+        sample.context = trajectory.format_for_reflector()
+
+        # Create final environment result
+        env_result = EnvironmentResult(
+            feedback=f"Task completed in {len(trajectory.steps)} steps. Status: {'Completed' if trajectory.is_completed else 'Incomplete'}",
+            ground_truth=sample.ground_truth,
+            metrics={
+                "completed": 1.0 if trajectory.is_completed else 0.0,
+                "num_steps": len(trajectory.steps),
+                "tgc": tgc,
+                "unit_tests_passed": unit_tests_passed,
+                "unit_tests_total": unit_tests_total
+            }
+        )
+
+        # Reflection - use trajectory for analysis
+        reflection = self.reflector.reflect(
+            playbook=self.playbook,
+            ground_truth=env_result.ground_truth,
+            feedback=sample.context,  # Pass full trajectory as feedback
+            unit_test_results=unit_test_output,  # Pass unit test results
+            max_refinement_rounds=self.max_refinement_rounds,
+        )
+
+        # Apply bullet tags and update reflection history
+        self._apply_bullet_tags(reflection)
+        self._update_recent_reflections(reflection)
+
+        # Curation - update playbook based on reflection
+        curator_output = self.curator.curate(
+            reflection=reflection,
+            playbook=self.playbook,
+            question_context=self._question_context(sample, env_result),
+            progress=self._progress_string(epoch, total_epochs, step_index, total_steps),
+            final_generated_code=final_generator_output.final_answer if final_generator_output else "(no code)",
+            guidebook=self._reflection_context(),  # Recent reflections
+        )
+
+        # Apply delta to playbook
+        self.playbook.apply_delta(curator_output.delta)
+        print(f"\nUpdated playbook:\n{self.playbook.as_prompt()}\n")
+
+        # Calculate execution time and log metrics
+        execution_time = time.time() - start_time
+
+        if self.logger:
+            from appworld_experiment.experiment_logger import TaskMetrics, parse_unit_test_results
+
+            # Save trajectory
+            task_id = getattr(sample, 'task_id', f'sample_{step_index}')
+            self.logger.log_trajectory(task_id, sample.context)
+
+            # Parse unit test results to calculate TGC
+            unit_tests_passed, unit_tests_total = parse_unit_test_results(unit_test_output)
+            tgc = unit_tests_passed / unit_tests_total if unit_tests_total > 0 else 0.0
+
+            # Log task metrics
+            metrics = TaskMetrics(
+                task_id=task_id,
+                sample_index=step_index,
+                epoch=epoch,
+                completed=trajectory.is_completed,
+                num_steps=len(trajectory.steps),
+                success=trajectory.is_completed,  # Can be refined based on unit test results
+                execution_time=execution_time,
+                trajectory_length=len(sample.context),
+                num_bullet_tags=len(reflection.bullet_tags),
+                playbook_size=len(self.playbook.as_prompt().split('\n')),
+                tgc=tgc,
+                unit_tests_passed=unit_tests_passed,
+                unit_tests_total=unit_tests_total
+            )
+            self.logger.log_task_metrics(metrics)
+
+        return AdapterStepResult(
+            sample=sample,
+            generator_output=final_generator_output,
+            environment_result=env_result,
+            reflection=reflection,
+            curator_output=curator_output,
+            playbook_snapshot=self.playbook.as_prompt(),
+        )
+
+
+class AppWorldOfflineAdapter(AppWorldAdapterBase):
+    """Runs multi-epoch offline adaptation on AppWorld training split.
+
+    Key differences from base OfflineAdapter:
+    1. Uses AppWorldGenerator with task-specific parameters
+    2. Extracts user info from sample.metadata
+    3. Supports few-shot examples injection
+
+    Example:
+        ```python
+        from appworld_experiment.appworld_adaptation import AppWorldOfflineAdapter
+        from appworld_experiment.appworld_roles import (
+            AppWorldGenerator, AppWorldReflector, AppWorldCurator
+        )
+        from opence.models.clients import OpenAIClient
+        from opence.methods.ace import Playbook
+
+        llm = OpenAIClient(model="gpt-4")
+        adapter = AppWorldOfflineAdapter(
+            playbook=Playbook(),
+            generator=AppWorldGenerator(llm),
+            reflector=AppWorldReflector(llm),
+            curator=AppWorldCurator(llm),
+            few_shot_examples="[Your examples here]",
+        )
+
+        results = adapter.run(samples, environment, epochs=3)
+        ```
+    """
+
+    def __init__(
+        self,
+        *,
+        playbook: Optional[Playbook] = None,
+        generator: AppWorldGenerator,
+        reflector: AppWorldReflector,
+        curator: AppWorldCurator,
+        deduplicator: Optional[Deduplicator] = None,
+        max_refinement_rounds: int = 1,
+        reflection_window: int = 3,
+        max_interaction_steps: int = 10,
+        logger=None,
+    ) -> None:
+        """Initialize AppWorld offline adapter.
+
+        Args:
+            playbook: Initial playbook
+            generator: AppWorldGenerator instance
+            reflector: AppWorldReflector instance
+            curator: AppWorldCurator instance
+            deduplicator: Optional deduplicator for playbook cleanup
+            max_refinement_rounds: Reflector refinement iterations
+            reflection_window: Number of recent reflections to keep
+            max_interaction_steps: Maximum number of agent-environment interaction steps
+            logger: Optional ExperimentLogger for tracking
+        """
+        super().__init__(
+            playbook=playbook,
+            generator=generator,
+            reflector=reflector,
+            curator=curator,
+            max_refinement_rounds=max_refinement_rounds,
+            reflection_window=reflection_window,
+            max_interaction_steps=max_interaction_steps,
+            logger=logger,
+        )
+        self.deduplicator = deduplicator
+
+    def run(
+        self,
+        samples: Sequence[Sample],
+        environment: TaskEnvironment,
+        epochs: int = 1,
+    ) -> List[AdapterStepResult]:
+        """Run offline adaptation loop for multiple epochs.
+
+        Args:
+            samples: Sequence of Samples to process (with metadata containing user info)
+            environment: TaskEnvironment for evaluation
+            epochs: Number of training epochs
+
+        Returns:
+            List of AdapterStepResult for all samples across all epochs
+        """
+        results: List[AdapterStepResult] = []
+        total_steps = len(samples)
+
+        for epoch_idx in range(1, epochs + 1):
+            bullet_ids_this_epoch = []
+
+            for step_idx, sample in enumerate(samples, start=1):
+                result = self._process_sample(
+                    sample,
+                    environment,
+                    epoch=epoch_idx,
+                    total_epochs=epochs,
+                    step_index=step_idx,
+                    total_steps=total_steps,
+                )
+                results.append(result)
+
+                # Collect bullet IDs for deduplication
+                bullet_ids_this_epoch.extend(
+                    op.bullet_id
+                    for op in result.curator_output.delta.operations
+                    if op.bullet_id
+                )
+
+            # Deduplicate playbook after each epoch
+            if self.deduplicator:
+                self.playbook.deduplicate(self.deduplicator, bullet_ids_this_epoch)
+
+        return results
+
+
+class AppWorldOnlineAdapter(AppWorldAdapterBase):
+    """Processes a stream of AppWorld samples sequentially.
+
+    Key differences from base OnlineAdapter:
+    1. Uses AppWorldGenerator with task-specific parameters
+    2. Extracts user info from sample.metadata
+    3. Updates playbook after each sample (no epoch batching)
+
+    Example:
+        ```python
+        from appworld_experiment.appworld_adaptation import AppWorldOnlineAdapter
+
+        adapter = AppWorldOnlineAdapter(
+            playbook=Playbook(),
+            generator=AppWorldGenerator(llm),
+            reflector=AppWorldReflector(llm),
+            curator=AppWorldCurator(llm),
+            few_shot_examples="[Your examples here]",
+        )
+
+        # Process streaming samples
+        results = adapter.run(sample_stream, environment)
+        ```
+    """
+
+    def run(
+        self,
+        samples: Iterable[Sample],
+        environment: TaskEnvironment,
+    ) -> List[AdapterStepResult]:
+        """Run online adaptation on streaming samples.
+
+        Unlike offline adaptation which processes samples in epochs,
+        online adaptation updates the playbook after each sample.
+
+        Args:
+            samples: Iterable of Samples (can be infinite stream, with metadata)
+            environment: TaskEnvironment for evaluation
+
+        Returns:
+            List of AdapterStepResult for all processed samples
+        """
+        results: List[AdapterStepResult] = []
+
+        for step_idx, sample in enumerate(samples, start=1):
+            result = self._process_sample(
+                sample,
+                environment,
+                epoch=1,
+                total_epochs=1,
+                step_index=step_idx,
+                total_steps=step_idx,  # Total is unknown in streaming
+            )
+            results.append(result)
+
+        return results
