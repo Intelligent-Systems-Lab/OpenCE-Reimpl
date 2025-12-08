@@ -71,15 +71,12 @@ def main():
     # 嘗試不同的請求格式
     test_payloads = [
         # 格式 1: 直接 JSON body
-        {"task_id": "82e2fac_1"},
+        {"task_id": "0a9d82a_1", "load_ground_truth": "true","ground_truth_mode": "fullminimal"},
     ]
     
     for i, payload in enumerate(test_payloads):
         print(f"\n嘗試格式 {i+1}: {payload}")
         try:
-            r = client.post("/close_all", json=payload)
-            print(f"  關閉所有任務狀態碼: {r.status_code}")
-            
             r = client.post("/initialize", json=payload)
             print(f"  狀態碼: {r.status_code}")
             print(f"  回應: {r.text}")
@@ -96,7 +93,7 @@ def main():
     print("Step 4: Execute 任務代碼")
     print("=" * 50)
 
-    test_code ="print(\"Hello, AppWorld!\")"
+    test_code ="print(answer=4)"
     
     
     for i, payload in enumerate(test_payloads):
@@ -114,11 +111,29 @@ def main():
             if r.status_code == 200:
                 print("  ✅ 成功!")
             
-            response = client.post("/close_all", json={"task_id": payload["task_id"]})
+            print("\n" + "=" * 50)
+            print("Step 5: task_completed")
+            print("=" * 50)
+            r = client.post("/task_completed", json={"task_id": payload["task_id"]})
+            print(f"  狀態碼: {r.status_code}")
+            print(f"  回應: {r.text}")
+
+            print("\n" + "=" * 50)
+            print("Step 5: 評估任務完成")
+            print("=" * 50)
+            r = client.post("/evaluate", json={"task_id": payload["task_id"], "report": "true"})
+            print(f"  狀態碼: {r.status_code}")
+            print(f"  回應: {r.text}")
+            
+            if r.status_code == 200:
+                print("  ✅ 成功!")
+
+            response = client.post("/close_all", json={"task_id": payload["task_id"]},)
             print(f"關閉任務狀態碼: {response.status_code}")
             print(f"關閉任務回應: {response.text}")
         except Exception as e:
             print(f"  ❌ 失敗: {e}")
+            
     
     client.close()
     print("\n✅ 測試完成!")
