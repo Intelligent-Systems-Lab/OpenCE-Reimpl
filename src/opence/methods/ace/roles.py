@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 import re
 from dataclasses import dataclass
@@ -49,12 +50,12 @@ def _safe_json_loads(text: str) -> Dict[str, Any]:
 
     if xml_match:
         extracted_json_text  = xml_match.group(1).strip()
-        print(f"\nJSON found in XML tags: {extracted_json_text}\n")
+        logging.debug(f"\nJSON found in XML tags: {extracted_json_text}\n")
         try:
             data = json.loads(extracted_json_text)
             return data
         except json.JSONDecodeError as e:
-            print(f"\nJSONDecodeError in XML content: {e}\n")
+            logging.error(f"\nJSONDecodeError in XML content: {e}\n")
             # If XML tag content is invalid, continue trying other methods
 
         if not isinstance(data, dict):
@@ -82,12 +83,12 @@ def _safe_json_loads(text: str) -> Dict[str, Any]:
         return {}
 
     extracted_json_text = json_match.group(1)
-    print(f"\nPotential JSON found: {extracted_json_text}\n")
+    logging.debug(f"\nPotential JSON found: {extracted_json_text}\n")
     # Validate if it's valid JSON
     try:
         data = json.loads(extracted_json_text)
     except json.JSONDecodeError as exc:
-        print(f"\nJSONDecodeError: {exc}\n")
+        logging.error(f"\nJSONDecodeError: {exc}\n")
         debug_path = Path("logs/json_failures.log")
         debug_path.parent.mkdir(parents=True, exist_ok=True)
         with debug_path.open("a", encoding="utf-8") as fh:
