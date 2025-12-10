@@ -12,6 +12,40 @@ from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, asdict
 
 
+# ANSI color codes for terminal output
+class Colors:
+    """ANSI color codes for terminal output."""
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+
+    # Role colors
+    GENERATOR = '\033[94m'  # Blue
+    REFLECTOR = '\033[95m'  # Magenta
+    CURATOR = '\033[96m'    # Cyan
+
+    # Token count colors
+    GREEN = '\033[92m'      # Low usage
+    YELLOW = '\033[93m'     # Medium usage
+    RED = '\033[91m'        # High usage
+
+    # Label color
+    GRAY = '\033[90m'       # For labels like "Model:", "Tokens:"
+
+
+@dataclass
+class LLMCallRecord:
+    """Record of a single LLM API call."""
+    timestamp: str
+    task_id: str
+    role: str  # "generator", "reflector", "curator"
+    step: Optional[int]  # Interaction step (for generator)
+    prompt_tokens: Optional[int]  # Actual tokens from API response
+    completion_tokens: Optional[int]  # Actual tokens from API response
+    total_tokens: Optional[int]  # Actual tokens from API response
+    model: str
+    estimated_prompt_tokens: Optional[int] = None  # Pre-call estimation (tiktoken)
+
+
 @dataclass
 class ExperimentConfig:
     """Configuration for an experiment run."""
@@ -131,6 +165,7 @@ class ExperimentLogger:
         self.metrics_file = self.log_dir / "metrics.jsonl"
         self.summary_file = self.log_dir / "summary.json"
         self.stats_report_file = self.log_dir / "statistics_report.json"
+        self.llm_calls_file = self.log_dir / "llm_calls.jsonl"  # Token usage log
         self.trajectory_dir = self.log_dir / "trajectories"
         self.trajectory_dir.mkdir(exist_ok=True)
 
@@ -218,6 +253,85 @@ class ExperimentLogger:
         # Write to JSONL file
         with open(self.metrics_file, 'a', encoding='utf-8') as f:
             f.write(json.dumps(asdict(metrics), ensure_ascii=False) + '\n')
+
+    def log_llm_call(
+        self,
+        task_id: str,
+        role: str,
+        model: str,
+        prompt_tokens: Optional[int] = None,
+        completion_tokens: Optional[int] = None,
+        total_tokens: Optional[int] = None,
+        step: Optional[int] = None,
+        estimated_prompt_tokens: Optional[int] = None,
+    ):
+        """Log a single LLM API call with token usage.
+
+        Args:
+            task_id: Task identifier
+            role: Role making the call ("generator", "reflector", "curator")
+            model: Model name
+            prompt_tokens: Actual number of input tokens from API
+            completion_tokens: Actual number of output tokens from API
+            total_tokens: Actual total tokens from API
+            step: Interaction step number (for generator)
+            estimated_prompt_tokens: Pre-call token estimation (tiktoken)
+        """
+        record = LLMCallRecord(
+            timestamp=datetime.now().isoformat(),
+            task_id=task_id,
+            role=role,
+            step=step,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            model=model,
+            estimated_prompt_tokens=estimated_prompt_tokens,
+        )
+
+        # Log to console with colors
+        tokens_str = f"{total_tokens:,}" if total_tokens else "N/A"
+        step_str = f" (step {step})" if step is not None else ""
+
+        # Choose role color
+        role_colors = {
+            "generator": Colors.GENERATOR,
+            "reflector": Colors.REFLECTOR,
+            "curator": Colors.CURATOR,
+        }
+        role_color = role_colors.get(role.lower(), Colors.RESET)
+
+        # Choose token count color based on usage
+        # Thresholds: <4000 = green, 4000-6000 = yellow, >6000 = red
+        if total_tokens:
+            if total_tokens < 4000:
+                token_color = Colors.GREEN
+            elif total_tokens < 6000:
+                token_color = Colors.YELLOW
+            else:
+                token_color = Colors.RED
+        else:
+            token_color = Colors.GRAY
+
+        # Format estimation string
+        if estimated_prompt_tokens:
+            est_str = f" {Colors.GRAY}(est: {estimated_prompt_tokens:,}){Colors.RESET}"
+        else:
+            est_str = ""
+
+        # Build colored log message
+        colored_msg = (
+            f"{Colors.BOLD}[LLM Call]{Colors.RESET} "
+            f"{role_color}{role}{Colors.RESET}{Colors.GRAY}{step_str}{Colors.RESET} "
+            f"{Colors.GRAY}|{Colors.RESET} Model: {model} {Colors.GRAY}|{Colors.RESET} "
+            f"Tokens: {token_color}{prompt_tokens:,} + {completion_tokens:,} = {tokens_str}{Colors.RESET}{est_str}"
+        )
+
+        self.logger.info(colored_msg)
+
+        # Write to JSONL file
+        with open(self.llm_calls_file, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(asdict(record), ensure_ascii=False) + '\n')
 
     def log_trajectory(self, task_id: str, trajectory: str):
         """Save trajectory to a separate file.
