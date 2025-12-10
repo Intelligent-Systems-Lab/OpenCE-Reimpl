@@ -19,6 +19,10 @@ class LLMResponse:
 
     text: str
     raw: Optional[Dict[str, Any]] = None
+    prompt_tokens: Optional[int] = None  # Actual tokens from API (input)
+    completion_tokens: Optional[int] = None  # Actual tokens from API (output)
+    total_tokens: Optional[int] = None  # Actual total tokens from API
+    estimated_prompt_tokens: Optional[int] = None  # Pre-call estimation (tiktoken)
 
 
 class LLMClient(ABC):
@@ -238,21 +242,82 @@ class OpenAIClient(LLMClient):
             api_key = os.getenv("OPENAI_API_KEY")
         self.client = OpenAI(base_url=base_url, api_key=api_key)
 
+    def _estimate_prompt_tokens(self, messages: list) -> int:
+        """Estimate token count for messages before API call.
+
+        Uses tiktoken to count tokens accurately. Falls back to character-based
+        estimation if tiktoken is not available.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+
+        Returns:
+            Estimated token count
+        """
+        try:
+            import tiktoken
+            # Use cl100k_base encoding (GPT-4, GPT-3.5-turbo)
+            # This is a reasonable approximation for most models
+            encoding = tiktoken.get_encoding("cl100k_base")
+
+            # Count tokens for all messages
+            # OpenAI format adds special tokens: <|start|>role\ncontent<|end|>
+            total_tokens = 0
+            for message in messages:
+                # Add tokens for message structure overhead (~4 tokens per message)
+                total_tokens += 4
+                total_tokens += len(encoding.encode(message.get("role", "")))
+                total_tokens += len(encoding.encode(message.get("content", "")))
+
+            # Add overhead for message priming
+            total_tokens += 2
+
+            return total_tokens
+        except ImportError:
+            # Fallback: rough approximation (1 token ≈ 4 characters for English)
+            total_chars = sum(len(m.get("content", "")) for m in messages)
+            return total_chars // 4
+
     def complete(self, prompt: str, **kwargs: Any) -> LLMResponse:
+        messages = [
+            {"role": "system", "content": self._system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+
+        # Estimate token count BEFORE API call
+        estimated_prompt_tokens = self._estimate_prompt_tokens(messages)
+
+        # Check if we might exceed context window (if max_tokens is known)
+        max_context = kwargs.get('max_context_tokens', None)
+        if max_context and estimated_prompt_tokens > max_context:
+            print(f"⚠️  WARNING: Estimated prompt tokens ({estimated_prompt_tokens:,}) "
+                  f"exceeds max context ({max_context:,})!")
+
+        # Make API call
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=[
-                {"role": "system", "content": self._system_prompt},
-                {"role": "user", "content": prompt},
-            ],
+            messages=messages,
             stream=False,
         )
         raw_content = response.choices[0].message.content
-        
+
+        # Extract token usage from API response
+        usage = response.usage if hasattr(response, 'usage') else None
+        prompt_tokens = usage.prompt_tokens if usage else estimated_prompt_tokens
+        completion_tokens = usage.completion_tokens if usage else None
+        total_tokens = usage.total_tokens if usage else None
+
         if self.model.startswith("deepseek-r1"):
-            print("--- 原始內容 (含思考) ---")
-            print(raw_content[:100] + "...") # 只印前100字示意
+            print("--- Original  ---")
+            print(raw_content[:100] + "...") # Print first 100 chars
             raw_content = re.sub(r'<think>.*?</think>', '', raw_content, flags=re.DOTALL).strip()
-            print("\n--- 過濾後的最終答案 ---")
+            print("\n--- Filtered Final Answer ---")
             print(raw_content)
-        return LLMResponse(text=raw_content)
+
+        return LLMResponse(
+            text=raw_content,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            estimated_prompt_tokens=estimated_prompt_tokens,
+        )
