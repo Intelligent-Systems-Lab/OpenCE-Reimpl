@@ -117,3 +117,6 @@ dmypy.json
 # logs
 logs/
 *.log
+
+# claude setting files
+CLAUDE.md
