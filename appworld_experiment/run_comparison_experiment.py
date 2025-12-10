@@ -19,12 +19,18 @@ This allows comparison of TGC/SGC metrics to evaluate the benefit of offline tra
 
 from __future__ import annotations
 
+import logger
 import argparse
 import json
 import sys
+import os
 from pathlib import Path
 from typing import List
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -100,8 +106,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model-name",
         type=str,
-        default="gpt-oss:20b",
-        help="Your model name (default: gpt-oss:20b)",
+        default=os.getenv("MODEL_NAME", "gpt-oss:20b"),
+        help="Your model name (default from .env or gpt-oss:20b)",
+    )
+    parser.add_argument(
+        "--deduplication-model",
+        type=str,
+        default=os.getenv("DEDUPLICATION_MODEL", "all-MiniLM-L6-v2"),
+        help="Model name for deduplication (default from .env)",
+    )
+    parser.add_argument(
+        "--dedup-frequency",
+        type=int,
+        default=int(os.getenv("DEDUP_FREQUENCY", "0")),
+        help="Perform deduplication every N samples (0=disabled, >0=every N samples)",
+    )
+    parser.add_argument(
+        "--base-url",
+        type=str,
+        default=os.getenv("BASE_URL", "http://localhost:11434/v1"),
+        help="Base URL for LLM API (default from .env)",
+    )
+    parser.add_argument(
+        "--api-key",
+        type=str,
+        default=os.getenv("OPENAI_API_KEY", "ollama"),
+        help="API key for LLM (default from .env)",
+    )
+    parser.add_argument(
+        "--appworld-url",
+        type=str,
+        default=os.getenv("APPWORLD_API_URL", "http://localhost:8777"),
+        help="AppWorld API server URL (default from .env)",
     )
     return parser.parse_args()
 
@@ -112,7 +148,6 @@ def save_playbook(playbook: Playbook, filepath: Path, logger) -> None:
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(playbook.dumps())
     logger.info(f"Playbook saved to: {filepath}")
-    print(f"✓ Playbook saved to: {filepath}")
 
 
 def load_playbook(filepath: Path, logger) -> Playbook:
@@ -121,7 +156,6 @@ def load_playbook(filepath: Path, logger) -> Playbook:
         data = f.read()
     playbook = Playbook.loads(data)
     logger.info(f"Playbook loaded from: {filepath}")
-    print(f"✓ Playbook loaded from: {filepath}")
     return playbook
 
 
@@ -135,29 +169,30 @@ def run_offline_training(
     """Run offline adaptation on train split."""
     from appworld_experiment.experiment_logger import ExperimentConfig
 
-    print(f"\n{'='*80}")
-    print(f"PHASE 1: Offline Training (train split)")
-    print(f"{'='*80}\n")
+    
+    logger.info(f"PHASE 1: Offline Training (train split)")
+    
 
     # Load training samples
     all_train_samples = dataset.load_samples(split="train")
     train_samples = all_train_samples[:args.offline_samples] if args.offline_samples else all_train_samples
 
     logger.info(f"Offline training: {len(train_samples)} samples, {args.offline_epochs} epochs")
-    print(f"Training samples: {len(train_samples)}")
-    print(f"Epochs: {args.offline_epochs}\n")
+    logger.info(f"Training samples: {len(train_samples)}")
+    logger.info(f"Epochs: {args.offline_epochs}\n")
 
-    # Create offline adapter
-    generator = AppWorldGenerator(client)
-    reflector = AppWorldReflector(client)
-    curator = AppWorldCurator(client)
+    # Create offline adapter with logger
+    generator = AppWorldGenerator(client, logger=logger)
+    reflector = AppWorldReflector(client, logger=logger)
+    curator = AppWorldCurator(client, logger=logger)
 
     offline_adapter = AppWorldOfflineAdapter(
         playbook=Playbook(),
         generator=generator,
         reflector=reflector,
         curator=curator,
-        deduplicator=Deduplicator("all-MiniLM-L6-v2"),
+        deduplicator=Deduplicator(args.deduplication_model) if args.dedup_frequency > 0 else None,
+        dedup_frequency=args.dedup_frequency,
         max_refinement_rounds=1,
         max_interaction_steps=5,
         logger=logger,
@@ -168,9 +203,9 @@ def run_offline_training(
     offline_results = offline_adapter.run(train_samples, environment, epochs=args.offline_epochs)
 
     logger.info(f"Offline training complete: {len(offline_results)} results")
-    print(f"\n✓ Offline training complete")
-    print(f"  Processed: {len(offline_results)} task instances")
-    print(f"  Final playbook size: {len(offline_adapter.playbook.as_prompt().split(chr(10)) if offline_adapter.playbook.as_prompt() else [])} lines\n")
+    logger.info(f"\n✓ Offline training complete")
+    logger.info(f"  Processed: {len(offline_results)} task instances")
+    logger.info(f"  Final playbook size: {len(offline_adapter.playbook.as_prompt().split(chr(10)) if offline_adapter.playbook.as_prompt() else [])} lines\n")
 
     return offline_adapter.playbook
 
@@ -185,28 +220,30 @@ def run_online_evaluation(
     experiment_name_suffix: str
 ) -> List:
     """Run online evaluation on specified split."""
-    print(f"\n{'='*80}")
-    print(f"Online Evaluation ({experiment_name_suffix})")
-    print(f"{'='*80}\n")
+    
+    logger.info(f"Online Evaluation ({experiment_name_suffix})")
+    
 
     # Load evaluation samples
     all_eval_samples = dataset.load_samples(split=args.online_split)
     eval_samples = all_eval_samples[:args.online_samples] if args.online_samples else all_eval_samples
 
     logger.info(f"Online evaluation: {len(eval_samples)} samples from {args.online_split} split")
-    print(f"Evaluation samples: {len(eval_samples)} ({args.online_split} split)")
-    print(f"Playbook size: {len(playbook.as_prompt().split(chr(10)) if playbook.as_prompt() else [])} lines\n")
+    logger.info(f"Evaluation samples: {len(eval_samples)} ({args.online_split} split)")
+    logger.info(f"Playbook size: {len(playbook.as_prompt().split(chr(10)) if playbook.as_prompt() else [])} lines\n")
 
-    # Create online adapter
-    generator = AppWorldGenerator(client)
-    reflector = AppWorldReflector(client)
-    curator = AppWorldCurator(client)
+    # Create online adapter with logger
+    generator = AppWorldGenerator(client, logger=logger)
+    reflector = AppWorldReflector(client, logger=logger)
+    curator = AppWorldCurator(client, logger=logger)
 
     online_adapter = AppWorldOnlineAdapter(
         playbook=playbook,
         generator=generator,
         reflector=reflector,
         curator=curator,
+        deduplicator=Deduplicator(args.deduplication_model) if args.dedup_frequency > 0 else None,
+        dedup_frequency=args.dedup_frequency,
         max_refinement_rounds=1,
         max_interaction_steps=5,
         logger=logger,
@@ -217,8 +254,8 @@ def run_online_evaluation(
     online_results = online_adapter.run(eval_samples, environment)
 
     logger.info(f"Online evaluation complete: {len(online_results)} results")
-    print(f"\n✓ Online evaluation complete ({experiment_name_suffix})")
-    print(f"  Processed: {len(online_results)} samples\n")
+    logger.info(f"\n✓ Online evaluation complete ({experiment_name_suffix})")
+    logger.info(f"  Processed: {len(online_results)} samples\n")
 
     return online_results
 
@@ -233,6 +270,9 @@ def main() -> None:
 
     # Model configuration
     model_name = args.model_name
+    base_url = args.base_url
+    api_key = args.api_key
+    appworld_url = args.appworld_url
 
     # Initialize dataset and environment
     dataset = AppWorldDataset("/home/yanhong/appworld-server/data")
@@ -240,9 +280,9 @@ def main() -> None:
     # Phase 1: Offline Training (or load pre-trained playbook)
     if args.load_playbook:
         # Load pre-trained playbook
-        print(f"\n{'='*80}")
-        print(f"Loading pre-trained playbook")
-        print(f"{'='*80}\n")
+        
+        logger.info(f"Loading pre-trained playbook")
+        
 
         offline_logger = ExperimentLogger(experiment_name=f"{base_experiment_name}_offline_loaded")
         trained_playbook = load_playbook(Path(args.load_playbook), offline_logger)
@@ -268,12 +308,12 @@ def main() -> None:
         # Initialize client
         client = OpenAIClient(
             model=model_name,
-            api_key="ollama",
-            base_url="http://hc5.isl.lab.nycu.edu.tw:11434/v1"
+            api_key=api_key,
+            base_url=base_url
         )
 
         # Create environment
-        environment = AppWorldEnvironment(logger=offline_logger)
+        environment = AppWorldEnvironment(base_url=appworld_url, logger=offline_logger)
 
         # Run offline training
         trained_playbook = run_offline_training(args, client, environment, dataset, offline_logger)
@@ -308,10 +348,10 @@ def main() -> None:
     # Initialize client and environment for online evaluation
     client = OpenAIClient(
         model=model_name,
-        api_key="ollama",
-        base_url="http://hc5.isl.lab.nycu.edu.tw:11434/v1"
+        api_key=api_key,
+        base_url=base_url
     )
-    environment = AppWorldEnvironment(logger=online_with_offline_logger)
+    environment = AppWorldEnvironment(base_url=appworld_url, logger=online_with_offline_logger)
 
     # Run online evaluation with trained playbook
     online_with_offline_results = run_online_evaluation(
@@ -342,7 +382,7 @@ def main() -> None:
         online_without_offline_logger.log_config(baseline_config)
 
         # Create new environment for baseline
-        baseline_environment = AppWorldEnvironment(logger=online_without_offline_logger)
+        baseline_environment = AppWorldEnvironment(base_url=appworld_url, logger=online_without_offline_logger)
 
         # Run online evaluation with empty playbook (baseline)
         online_without_offline_results = run_online_evaluation(
@@ -356,17 +396,17 @@ def main() -> None:
         online_without_offline_logger.log_experiment_summary()
 
     # Print final summary
-    print(f"\n{'='*80}")
-    print(f"EXPERIMENT COMPLETE")
-    print(f"{'='*80}\n")
-    print(f"Results saved in: logs/appworld_experiments/")
-    print(f"  - Offline training: {offline_logger.log_dir if not args.load_playbook else 'N/A (loaded)'}")
-    print(f"  - Online w/ offline: {online_with_offline_logger.log_dir}")
+    
+    logger.info(f"EXPERIMENT COMPLETE")
+    
+    logger.info(f"Results saved in: logs/appworld_experiments/")
+    logger.info(f"  - Offline training: {offline_logger.log_dir if not args.load_playbook else 'N/A (loaded)'}")
+    logger.info(f"  - Online w/ offline: {online_with_offline_logger.log_dir}")
     if not args.skip_baseline:
-        print(f"  - Online w/o offline: {online_without_offline_logger.log_dir}")
-    print(f"\nTrained playbook: {playbook_path}")
-    print(f"\nCompare statistics_report.json files to see the impact of offline training!")
-    print(f"{'='*80}\n")
+        logger.info(f"  - Online w/o offline: {online_without_offline_logger.log_dir}")
+    logger.info(f"\nTrained playbook: {playbook_path}")
+    logger.info(f"\nCompare statistics_report.json files to see the impact of offline training!")
+    
 
 
 if __name__ == "__main__":

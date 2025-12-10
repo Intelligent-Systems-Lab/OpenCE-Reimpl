@@ -8,7 +8,6 @@ where samples arrive sequentially.
 Key differences from offline adaptation:
 - No epochs: processes samples once in order
 - Immediate playbook updates after each sample
-- No deduplication (can be added if needed)
 - Suitable for production deployment and continuous learning
 """
 
@@ -17,8 +16,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import os
 from pathlib import Path
 from typing import List
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -49,8 +53,44 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.0,
+        default=float(os.getenv("TEMPERATURE", "0.0")),
         help="Sampling temperature for generation.",
+    )
+    parser.add_argument(
+        "--model-name",
+        type=str,
+        default=os.getenv("MODEL_NAME", "gpt-oss:20b"),
+        help="Your model name (default from .env or gpt-oss:20b)",
+    )
+    parser.add_argument(
+        "--base-url",
+        type=str,
+        default=os.getenv("BASE_URL", "http://hc5.isl.lab.nycu.edu.tw:11434/v1"),
+        help="Base URL for LLM API (default from .env)",
+    )
+    parser.add_argument(
+        "--api-key",
+        type=str,
+        default=os.getenv("OPENAI_API_KEY", "ollama"),
+        help="API key for LLM (default from .env)",
+    )
+    parser.add_argument(
+        "--appworld-url",
+        type=str,
+        default=os.getenv("APPWORLD_API_URL", "http://localhost:8777"),
+        help="AppWorld API server URL (default from .env)",
+    )
+    parser.add_argument(
+        "--deduplication-model",
+        type=str,
+        default=os.getenv("DEDUPLICATION_MODEL", "all-MiniLM-L6-v2"),
+        help="Model name for deduplication (default from .env)",
+    )
+    parser.add_argument(
+        "--dedup-frequency",
+        type=int,
+        default=int(os.getenv("DEDUP_FREQUENCY", "0")),
+        help="Perform deduplication every N samples (0=disabled, >0=every N samples)",
     )
     parser.add_argument(
         "--max-samples",
@@ -79,9 +119,12 @@ def main() -> None:
     logger = ExperimentLogger(experiment_name=experiment_name)
 
     # Configuration
-    model_name = "gpt-oss:20b"
-    max_interaction_steps = 5
-    max_refinement_rounds = 1
+    model_name = args.model_name
+    base_url = args.base_url
+    api_key = args.api_key
+    appworld_url = args.appworld_url
+    max_interaction_steps = int(os.getenv("MAX_INTERACTION_STEPS", "5"))
+    max_refinement_rounds = int(os.getenv("MAX_REFINEMENT_ROUNDS", "1"))
 
     # Load dataset
     dataset = AppWorldDataset("/home/yanhong/appworld-server/data")
@@ -110,16 +153,18 @@ def main() -> None:
     # Initialize LLM client
     client = OpenAIClient(
         model=model_name,
-        api_key="ollama",
-        base_url="http://hc5.isl.lab.nycu.edu.tw:11434/v1"
+        api_key=api_key,
+        base_url=base_url
     )
 
-    # Use AppWorld-specific roles
-    generator = AppWorldGenerator(client)
-    reflector = AppWorldReflector(client)
-    curator = AppWorldCurator(client)
+    # Use AppWorld-specific roles with logger
+    generator = AppWorldGenerator(client, logger=logger)
+    reflector = AppWorldReflector(client, logger=logger)
+    curator = AppWorldCurator(client, logger=logger)
 
     # Use AppWorld online adapter with logger
+    from src.opence.methods.ace.deduplication import Deduplicator
+
     adapter = AppWorldOnlineAdapter(
         playbook=Playbook(),
         generator=generator,
@@ -127,18 +172,20 @@ def main() -> None:
         curator=curator,
         max_refinement_rounds=max_refinement_rounds,
         max_interaction_steps=max_interaction_steps,
+        deduplicator=Deduplicator(model_name=args.deduplication_model) if args.dedup_frequency > 0 else None,
+        dedup_frequency=args.dedup_frequency,
         logger=logger,
     )
 
     # Create environment with logger
-    environment = AppWorldEnvironment(logger=logger)
+    environment = AppWorldEnvironment(base_url=appworld_url, logger=logger)
 
     logger.info("Starting online adaptation with AppWorld...")
     logger.info(f"Processing {len(samples)} samples from {args.split} split")
-    print(f"\n{'='*80}")
-    print(f"Starting online adaptation with AppWorld...")
-    print(f"Processing {len(samples)} samples from {args.split} split")
-    print(f"{'='*80}\n")
+    
+    logger.info(f"Starting online adaptation with AppWorld...")
+    logger.info(f"Processing {len(samples)} samples from {args.split} split")
+    
 
     try:
         # Run online adaptation (processes samples sequentially)
@@ -148,13 +195,13 @@ def main() -> None:
         logger.log_experiment_summary()
 
         # Print summary
-        print(f"\n{'='*80}")
-        print(f"Online Adaptation Complete")
-        print(f"{'='*80}")
-        print(f"Processed {len(results)} samples")
-        print(f"\nFinal playbook ({len(adapter.playbook.as_prompt().split(chr(10)) if adapter.playbook.as_prompt() else [])} lines):")
-        print(adapter.playbook.as_prompt() or "(playbook is empty)")
-        print(f"\n{'='*80}")
+        
+        logger.info(f"Online Adaptation Complete")
+        
+        logger.info(f"Processed {len(results)} samples")
+        logger.info(f"\nFinal playbook ({len(adapter.playbook.as_prompt().split(chr(10)) if adapter.playbook.as_prompt() else [])} lines):")
+        logger.info(adapter.playbook.as_prompt() or "(playbook is empty)")
+        
 
     except Exception as e:
         logger.error(f"Experiment failed with error: {str(e)}", exc_info=True)

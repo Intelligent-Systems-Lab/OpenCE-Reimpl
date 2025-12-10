@@ -11,6 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -92,9 +96,11 @@ class AppWorldDataset:
             )
             samples.append(sample)
 
-            print(f"Successfully loaded task: {task_id}")
-        
-        print(f"Loaded {len(samples)} samples for split: {split}")
+            import logging
+            logging.debug(f"Successfully loaded task: {task_id}")
+
+        import logging
+        logging.info(f"Loaded {len(samples)} samples for split: {split}")
         return samples
 
 @dataclass
@@ -144,7 +150,11 @@ class AppWorldEnvironment(TaskEnvironment):
             "experiment_name": "ace_experiment_1"
         })
         result = response.json()
-        print(f"\nInitialized task {sample.task_id}\n")
+        if self.logger:
+            self.logger.info(f"Initialized task {sample.task_id}")
+        else:
+            import logging
+            logging.info(f"Initialized task {sample.task_id}")
         return result
 
     def close_task(self, task_id: str) -> dict:
@@ -158,7 +168,11 @@ class AppWorldEnvironment(TaskEnvironment):
         """
         response = self.client.post("/close_all", json={"task_id": task_id})
         result = response.json()
-        print(f"Closed task {task_id}")
+        if self.logger:
+            self.logger.info(f"Closed task {task_id}")
+        else:
+            import logging
+            logging.info(f"Closed task {task_id}")
         return result
 
     # ==================== Code Execution ====================
@@ -179,10 +193,8 @@ class AppWorldEnvironment(TaskEnvironment):
                 - ... other fields from AppWorld API
         """
         if self.logger:
-            self.logger.debug(f"Executing code for task {task_id}")
-            self.logger.debug(f"Code:\n{code}")
-        print(f"\nExecuting code for task {task_id}...")
-        print(f"Code:\n{code}\n")
+            self.logger.info(f"Executing code for task {task_id}")
+            self.logger.info(f"Code:\n{code}")
 
         payload = {
             "task_id": task_id,
@@ -193,8 +205,8 @@ class AppWorldEnvironment(TaskEnvironment):
         result = response.json()
 
         if self.logger:
-            self.logger.debug(f"Execution result: {result.get('status', 'unknown')}")
-        print(f"Execution response: {response.text}")
+            self.logger.info(f"Execution result: {result.get('status', 'unknown')}")
+            self.logger.info(f"Execution response: {response.text}")
         return result
 
     # ==================== Status Checking ====================
@@ -252,7 +264,8 @@ class AppWorldEnvironment(TaskEnvironment):
         }
         response = self.client.post("/evaluate", json=payload)
         result = response.json()
-        print(f"Unit test evaluation: {response.text}")
+        if self.logger:
+            self.logger.info(f"Unit test evaluation: {response.text}")
         return result
 
     def evaluate(self, sample: AppWorldSample, generator_output) -> EnvironmentResult:
@@ -310,14 +323,62 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.0,
+        default=float(os.getenv("TEMPERATURE", "0.7")),
         help="Sampling temperature for generation.",
     )
     parser.add_argument(
         "--model-name",
         type=str,
-        default="gpt-oss:20b",
-        help="Your model name (default: gpt-oss:20b)",
+        default=os.getenv("MODEL_NAME", "gpt-oss:20b"),
+        help="Your model name (default from .env or gpt-oss:20b)",
+    )
+    parser.add_argument(
+        "--deduplication-model",
+        type=str,
+        default=os.getenv("DEDUPLICATION_MODEL", "all-MiniLM-L6-v2"),
+        help="Model name for deduplication (default from .env)",
+    )
+    parser.add_argument(
+        "--dedup-frequency",
+        type=int,
+        default=int(os.getenv("DEDUP_FREQUENCY", "0")),
+        help="Perform deduplication every N samples (0=disabled, >0=every N samples)",
+    )
+    parser.add_argument(
+        "--base-url",
+        type=str,
+        default=os.getenv("BASE_URL", "http://localhost:11434/v1"),
+        help="Base URL for LLM API (default from .env)",
+    )
+    parser.add_argument(
+        "--api-key",
+        type=str,
+        default=os.getenv("OPENAI_API_KEY", "ollama"),
+        help="API key for LLM (default from .env)",
+    )
+    parser.add_argument(
+        "--appworld-url",
+        type=str,
+        default=os.getenv("APPWORLD_API_URL", "http://localhost:8777"),
+        help="AppWorld API server URL (default from .env)",
+    )
+    parser.add_argument(
+        "--max-interaction-steps",
+        type=int,
+        default=int(os.getenv("MAX_INTERACTION_STEPS", "5")),
+        help="Maximum interaction steps per task (default from .env)",
+    )
+    parser.add_argument(
+        "--max-refinement-rounds",
+        type=int,
+        default=int(os.getenv("MAX_REFINEMENT_ROUNDS", "1")),
+        help="Maximum refinement rounds per interaction (default from .env)",
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=int(os.getenv("EPOCHS", "3")),
+        help="Number of epochs to run the offline adaptation (default from .env)",
     )
     return parser.parse_args()
 
@@ -332,12 +393,15 @@ def main() -> None:
 
     # Parse command-line arguments
     args = parse_args()
-    
+
     # Configuration
     model_name = args.model_name
-    max_interaction_steps = 5
-    max_refinement_rounds = 1
-    epochs = 3
+    base_url = args.base_url
+    api_key = args.api_key
+    appworld_url = args.appworld_url
+    max_interaction_steps = args.max_interaction_steps
+    max_refinement_rounds = args.max_refinement_rounds
+    epochs = args.epochs
 
     # Log configuration
     dataset = AppWorldDataset("/home/yanhong/appworld-server/data")
@@ -358,14 +422,14 @@ def main() -> None:
     # Initialize LLM client
     client = OpenAIClient(
         model=model_name,
-        api_key="ollama",
-        base_url="http://hc5.isl.lab.nycu.edu.tw:11434/v1"
+        api_key=api_key,
+        base_url=base_url
     )
 
-    # Use AppWorld-specific roles
-    generator = AppWorldGenerator(client)
-    reflector = AppWorldReflector(client)
-    curator = AppWorldCurator(client)
+    # Use AppWorld-specific roles with logger
+    generator = AppWorldGenerator(client, logger=logger)
+    reflector = AppWorldReflector(client, logger=logger)
+    curator = AppWorldCurator(client, logger=logger)
 
     # Use AppWorld-specific adapter with logger
     adapter = AppWorldOfflineAdapter(
@@ -375,15 +439,15 @@ def main() -> None:
         curator=curator,
         max_refinement_rounds=max_refinement_rounds,
         max_interaction_steps=max_interaction_steps,
-        deduplicator=Deduplicator("all-MiniLM-L6-v2"),
+        deduplicator=Deduplicator(model_name=args.deduplication_model) if args.dedup_frequency > 0 else None,
+        dedup_frequency=args.dedup_frequency,
         logger=logger,
     )
 
     # Create environment with logger
-    environment = AppWorldEnvironment(logger=logger)
+    environment = AppWorldEnvironment(base_url=appworld_url, logger=logger)
 
     logger.info("Starting offline adaptation with AppWorld-specific adapter...")
-    print("Starting offline adaptation with AppWorld-specific adapter...")
 
     try:
         results = adapter.run(samples, environment, epochs=epochs)
@@ -391,19 +455,17 @@ def main() -> None:
         # Log experiment summary
         logger.log_experiment_summary()
 
-        # Print results
+        # Log results summary
         for step, result in enumerate(results, start=1):
-            print(f"\nStep {step}:")
-            print(f"  Question: {result.sample.question}")
-            print(f"  Model final answer: {result.generator_output.final_answer}")
-            print(f"  Feedback: {result.environment_result.feedback}")
-            print("  Reflection:")
-            print(json.dumps(result.reflection.raw, ensure_ascii=False, indent=2))
-            print("  Curator operations:")
-            print(json.dumps(result.curator_output.raw, ensure_ascii=False, indent=2))
+            logger.info(f"Step {step} completed")
+            logger.debug(f"  Question: {result.sample.question}")
+            logger.debug(f"  Model final answer: {result.generator_output.final_answer}")
+            logger.debug(f"  Feedback: {result.environment_result.feedback}")
+            logger.debug(f"  Reflection: {json.dumps(result.reflection.raw, ensure_ascii=False, indent=2)}")
+            logger.debug(f"  Curator operations: {json.dumps(result.curator_output.raw, ensure_ascii=False, indent=2)}")
 
-        print("\nFinal playbook:\n")
-        print(adapter.playbook.as_prompt() or "(playbook is empty)")
+        logger.info("Final playbook saved")
+        logger.debug(f"Playbook content:\n{adapter.playbook.as_prompt() or '(playbook is empty)'}")
 
     except Exception as e:
         logger.error(f"Experiment failed with error: {str(e)}", exc_info=True)
