@@ -94,6 +94,7 @@ class AppWorldGenerator(Generator):
         prompt_template: str = APPWORLD_GENERATOR_PROMPT,
         *,
         max_retries: int = 3,
+        logger=None,  # ExperimentLogger instance
     ) -> None:
         """Initialize AppWorldGenerator with custom prompt template.
 
@@ -101,12 +102,16 @@ class AppWorldGenerator(Generator):
             llm: LLM client for generation
             prompt_template: Custom prompt template (defaults to APPWORLD_GENERATOR_PROMPT)
             max_retries: Maximum retry attempts for JSON parsing
+            logger: ExperimentLogger instance for token usage logging
         """
         super().__init__(
             llm=llm,
             prompt_template=prompt_template,
             max_retries=max_retries,
         )
+        self.logger = logger
+        self._current_task_id: Optional[str] = None
+        self._current_step: Optional[int] = None
 
     def generate(
         self,
@@ -154,7 +159,21 @@ class AppWorldGenerator(Generator):
         for attempt in range(self.max_retries):
             try:
                 response = self.llm.complete(prompt, **kwargs)
-                print(f"\nAppWorldGenerator's LLM response: {response.text}\n")
+
+                # Log token usage if logger is available
+                if self.logger and hasattr(response, 'prompt_tokens'):
+                    self.logger.log_llm_call(
+                        task_id=self._current_task_id or "unknown",
+                        role="generator",
+                        model=self.llm.model or "unknown",
+                        prompt_tokens=response.prompt_tokens,
+                        completion_tokens=response.completion_tokens,
+                        total_tokens=response.total_tokens,
+                        step=self._current_step,
+                        estimated_prompt_tokens=response.estimated_prompt_tokens,
+                    )
+
+                self.logger.debug(f"\nAppWorldGenerator's LLM response: {response.text}\n")
                 data = _safe_json_loads(response.text)
 
                 reasoning = str(data.get("reasoning", ""))
@@ -180,11 +199,11 @@ class AppWorldGenerator(Generator):
                     + "\n\nIMPORTANT: You must output a single valid JSON object only. "
                     "Escape all quotes properly and avoid any extra text outside the JSON."
                 )
-            except openai.InternalServerError as err:
+            except openai.InternalServerError as err:  
                 last_error = err
                 if attempt + 1 >= self.max_retries:
                     break
-                print(f"InternalServerError encountered: {err}. Retrying...")
+                self.logger.info(f"InternalServerError encountered: {err}. Retrying...")
                 prompt = (
                     base_prompt
                     + "\n\nIMPORTANT: You must respond with a SINGLE valid JSON object. Do not output raw Python code."
@@ -235,6 +254,7 @@ class AppWorldReflector(Reflector):
         prompt_template: str = APPWORLD_REFLECTOR_PROMPT,
         *,
         max_retries: int = 3,
+        logger=None,  # ExperimentLogger instance
     ) -> None:
         """Initialize AppWorldReflector with custom prompt template.
 
@@ -242,12 +262,15 @@ class AppWorldReflector(Reflector):
             llm: LLM client for reflection
             prompt_template: Custom prompt template (defaults to APPWORLD_REFLECTOR_PROMPT)
             max_retries: Maximum retry attempts for JSON parsing
+            logger: ExperimentLogger instance for token usage logging
         """
         super().__init__(
             llm=llm,
             prompt_template=prompt_template,
             max_retries=max_retries,
         )
+        self.logger = logger
+        self._current_task_id: Optional[str] = None
 
     def reflect(
         self,
@@ -292,7 +315,20 @@ class AppWorldReflector(Reflector):
                 response = self.llm.complete(
                     prompt, refinement_round=round_idx, **kwargs
                 )
-                print(f"\nAppWorldReflector's LLM response: {response.text}\n")
+
+                # Log token usage if logger is available
+                if self.logger and hasattr(response, 'prompt_tokens'):
+                    self.logger.log_llm_call(
+                        task_id=self._current_task_id or "unknown",
+                        role="reflector",
+                        model=self.llm.model or "unknown",
+                        prompt_tokens=response.prompt_tokens,
+                        completion_tokens=response.completion_tokens,
+                        total_tokens=response.total_tokens,
+                        estimated_prompt_tokens=response.estimated_prompt_tokens,
+                    )
+
+                self.logger.debug(f"\nAppWorldReflector's LLM response: {response.text}\n")
                 try:
                     data = _safe_json_loads(response.text)
                     bullet_tags: List[BulletTag] = []
@@ -373,6 +409,7 @@ class AppWorldCurator(Curator):
         prompt_template: str = APPWORLD_CURATOR_PROMPT,
         *,
         max_retries: int = 3,
+        logger=None,  # ExperimentLogger instance
     ) -> None:
         """Initialize AppWorldCurator with custom prompt template.
 
@@ -380,12 +417,15 @@ class AppWorldCurator(Curator):
             llm: LLM client for curation
             prompt_template: Custom prompt template (defaults to APPWORLD_CURATOR_PROMPT)
             max_retries: Maximum retry attempts for JSON parsing
+            logger: ExperimentLogger instance for token usage logging
         """
         super().__init__(
             llm=llm,
             prompt_template=prompt_template,
             max_retries=max_retries,
         )
+        self.logger = logger
+        self._current_task_id: Optional[str] = None
 
     def curate(
         self,
@@ -428,7 +468,20 @@ class AppWorldCurator(Curator):
 
         for attempt in range(self.max_retries):
             response = self.llm.complete(prompt, **kwargs)
-            print(f"\nAppWorldCurator's LLM response: {response.text}\n")
+
+            # Log token usage if logger is available
+            if self.logger and hasattr(response, 'prompt_tokens'):
+                self.logger.log_llm_call(
+                    task_id=self._current_task_id or "unknown",
+                    role="curator",
+                    model=self.llm.model or "unknown",
+                    prompt_tokens=response.prompt_tokens,
+                    completion_tokens=response.completion_tokens,
+                    total_tokens=response.total_tokens,
+                    estimated_prompt_tokens=response.estimated_prompt_tokens,
+                )
+
+            self.logger.debug(f"\nAppWorldCurator's LLM response: {response.text}\n")
             try:
                 data = _safe_json_loads(response.text)
                 delta = DeltaBatch.from_json(data)

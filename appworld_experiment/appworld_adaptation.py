@@ -161,10 +161,21 @@ class AppWorldAdapterBase(AdapterBase):
         import time
         start_time = time.time()
 
+        # Get task_id for logging
+        task_id = getattr(sample, 'task_id', f'sample_{step_index}')
+
+        # Set task_id in roles for token logging
+        if hasattr(self.generator, '_current_task_id'):
+            self.generator._current_task_id = task_id
+        if hasattr(self.reflector, '_current_task_id'):
+            self.reflector._current_task_id = task_id
+        if hasattr(self.curator, '_current_task_id'):
+            self.curator._current_task_id = task_id
+
         # Log task start
         if self.logger:
             self.logger.log_task_start(
-                task_id=getattr(sample, 'task_id', f'sample_{step_index}'),
+                task_id=task_id,
                 sample_index=step_index,
                 epoch=epoch
             )
@@ -183,9 +194,15 @@ class AppWorldAdapterBase(AdapterBase):
         final_generator_output = None
 
         for interaction_step in range(1, self.max_interaction_steps + 1):
-            print(f"\n{'='*60}")
-            print(f"Interaction Step {interaction_step}/{self.max_interaction_steps}")
-            print(f"{'='*60}\n")
+            if self.logger:
+                self.logger.info(f"Interaction Step {interaction_step}/{self.max_interaction_steps}")
+            else:
+                import logging
+                logging.info(f"Interaction Step {interaction_step}/{self.max_interaction_steps}")
+
+            # Set current step for generator logging
+            if hasattr(self.generator, '_current_step'):
+                self.generator._current_step = interaction_step
 
             # Format trajectory history for generator
             trajectory_history = trajectory.format_for_reflector() if trajectory.steps else ""
@@ -218,7 +235,11 @@ class AppWorldAdapterBase(AdapterBase):
 
             # Check if task is completed via environment API
             if environment.is_task_completed(sample.task_id):
-                print("\n✓ Task completion detected by environment")
+                if self.logger:
+                    self.logger.info("Task completion detected by environment")
+                else:
+                    import logging
+                    logging.info("Task completion detected by environment")
                 is_completed = True
                 final_generator_output = generator_output
                 break
@@ -282,7 +303,11 @@ class AppWorldAdapterBase(AdapterBase):
 
         # Apply delta to playbook
         self.playbook.apply_delta(curator_output.delta)
-        print(f"\nUpdated playbook:\n{self.playbook.as_prompt()}\n")
+        if self.logger:
+            self.logger.debug(f"Updated playbook:\n{self.playbook.as_prompt()}")
+        else:
+            import logging
+            logging.debug(f"Updated playbook:\n{self.playbook.as_prompt()}")
 
         # Calculate execution time and log metrics
         execution_time = time.time() - start_time
@@ -364,6 +389,7 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
         reflector: AppWorldReflector,
         curator: AppWorldCurator,
         deduplicator: Optional[Deduplicator] = None,
+        dedup_frequency: int = 0,
         max_refinement_rounds: int = 1,
         reflection_window: int = 3,
         max_interaction_steps: int = 10,
@@ -377,6 +403,9 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
             reflector: AppWorldReflector instance
             curator: AppWorldCurator instance
             deduplicator: Optional deduplicator for playbook cleanup
+            dedup_frequency: Perform deduplication every N samples.
+                             0 = once per epoch (default),
+                             N > 0 = every N samples
             max_refinement_rounds: Reflector refinement iterations
             reflection_window: Number of recent reflections to keep
             max_interaction_steps: Maximum number of agent-environment interaction steps
@@ -393,6 +422,7 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
             logger=logger,
         )
         self.deduplicator = deduplicator
+        self.dedup_frequency = dedup_frequency
 
     def run(
         self,
@@ -412,10 +442,10 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
         """
         results: List[AdapterStepResult] = []
         total_steps = len(samples)
+        bullet_ids_buffer = []  # Buffer for collecting bullet IDs
+        sample_counter = 0  # Track total samples processed
 
         for epoch_idx in range(1, epochs + 1):
-            bullet_ids_this_epoch = []
-
             for step_idx, sample in enumerate(samples, start=1):
                 result = self._process_sample(
                     sample,
@@ -427,16 +457,34 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
                 )
                 results.append(result)
 
-                # Collect bullet IDs for deduplication
-                bullet_ids_this_epoch.extend(
+                # Collect bullet IDs
+                new_bullet_ids = [
                     op.bullet_id
                     for op in result.curator_output.delta.operations
                     if op.bullet_id
-                )
+                ]
+                bullet_ids_buffer.extend(new_bullet_ids)
+                sample_counter += 1
 
-            # Deduplicate playbook after each epoch
-            if self.deduplicator:
-                self.playbook.deduplicate(self.deduplicator, bullet_ids_this_epoch)
+                # Sample-based deduplication (if enabled)
+                if self.deduplicator and self.dedup_frequency > 0:
+                    if sample_counter % self.dedup_frequency == 0:
+                        if self.logger:
+                            self.logger.info(f"[Deduplication] Processing after {sample_counter} samples")
+                        else:
+                            import logging
+                            logging.info(f"[Deduplication] Processing after {sample_counter} samples")
+                        self.playbook.deduplicate(self.deduplicator, bullet_ids_buffer)
+                        bullet_ids_buffer = []  # Clear buffer after dedup
+
+        # Final deduplication for any remaining bullets in buffer
+        if self.deduplicator and bullet_ids_buffer:
+            if self.logger:
+                self.logger.info(f"[Deduplication] Final processing for remaining {len(bullet_ids_buffer)} bullets")
+            else:
+                import logging
+                logging.info(f"[Deduplication] Final processing for remaining {len(bullet_ids_buffer)} bullets")
+            self.playbook.deduplicate(self.deduplicator, bullet_ids_buffer)
 
         return results
 
@@ -448,6 +496,7 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
     1. Uses AppWorldGenerator with task-specific parameters
     2. Extracts user info from sample.metadata
     3. Updates playbook after each sample (no epoch batching)
+    4. Supports sample-based deduplication
 
     Example:
         ```python
@@ -458,13 +507,57 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
             generator=AppWorldGenerator(llm),
             reflector=AppWorldReflector(llm),
             curator=AppWorldCurator(llm),
-            few_shot_examples="[Your examples here]",
+            deduplicator=Deduplicator("all-MiniLM-L6-v2"),
+            dedup_frequency=5,  # Deduplicate every 5 samples
         )
 
         # Process streaming samples
         results = adapter.run(sample_stream, environment)
         ```
     """
+
+    def __init__(
+        self,
+        *,
+        playbook: Optional[Playbook] = None,
+        generator: AppWorldGenerator,
+        reflector: AppWorldReflector,
+        curator: AppWorldCurator,
+        deduplicator: Optional[Deduplicator] = None,
+        dedup_frequency: int = 0,
+        max_refinement_rounds: int = 1,
+        reflection_window: int = 3,
+        max_interaction_steps: int = 10,
+        logger=None,
+    ) -> None:
+        """Initialize AppWorld online adapter.
+
+        Args:
+            playbook: Initial playbook
+            generator: AppWorldGenerator instance
+            reflector: AppWorldReflector instance
+            curator: AppWorldCurator instance
+            deduplicator: Optional deduplicator for playbook cleanup
+            dedup_frequency: Perform deduplication every N samples.
+                             0 = no deduplication (default),
+                             N > 0 = every N samples
+            max_refinement_rounds: Reflector refinement iterations
+            reflection_window: Number of recent reflections to keep
+            max_interaction_steps: Maximum number of agent-environment interaction steps
+            logger: Optional ExperimentLogger for tracking
+        """
+        super().__init__(
+            playbook=playbook,
+            generator=generator,
+            reflector=reflector,
+            curator=curator,
+            max_refinement_rounds=max_refinement_rounds,
+            reflection_window=reflection_window,
+            max_interaction_steps=max_interaction_steps,
+            logger=logger,
+        )
+        self.deduplicator = deduplicator
+        self.dedup_frequency = dedup_frequency
 
     def run(
         self,
@@ -484,6 +577,8 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
             List of AdapterStepResult for all processed samples
         """
         results: List[AdapterStepResult] = []
+        bullet_ids_buffer = []  # Buffer for collecting bullet IDs
+        sample_counter = 0  # Track samples processed
 
         for step_idx, sample in enumerate(samples, start=1):
             result = self._process_sample(
@@ -495,5 +590,34 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
                 total_steps=step_idx,  # Total is unknown in streaming
             )
             results.append(result)
+
+            # Collect bullet IDs
+            new_bullet_ids = [
+                op.bullet_id
+                for op in result.curator_output.delta.operations
+                if op.bullet_id
+            ]
+            bullet_ids_buffer.extend(new_bullet_ids)
+            sample_counter += 1
+
+            # Sample-based deduplication (if enabled)
+            if self.deduplicator and self.dedup_frequency > 0:
+                if sample_counter % self.dedup_frequency == 0:
+                    if self.logger:
+                        self.logger.info(f"[Deduplication] Processing after {sample_counter} samples")
+                    else:
+                        import logging
+                        logging.info(f"[Deduplication] Processing after {sample_counter} samples")
+                    self.playbook.deduplicate(self.deduplicator, bullet_ids_buffer)
+                    bullet_ids_buffer = []  # Clear buffer after dedup
+
+        # Final deduplication for any remaining bullets in buffer
+        if self.deduplicator and bullet_ids_buffer:
+            if self.logger:
+                self.logger.info(f"[Deduplication] Final processing for remaining {len(bullet_ids_buffer)} bullets")
+            else:
+                import logging
+                logging.info(f"[Deduplication] Final processing for remaining {len(bullet_ids_buffer)} bullets")
+            self.playbook.deduplicate(self.deduplicator, bullet_ids_buffer)
 
         return results
