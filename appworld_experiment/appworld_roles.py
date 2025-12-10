@@ -124,7 +124,7 @@ class AppWorldGenerator(Generator):
         main_user_phone_number: str = "",
         trajectory_history: str = "",
         **kwargs: Any,
-    ) -> GeneratorOutput:
+    ) -> Optional[GeneratorOutput]:
         """Generate AppWorld task solution using playbook and user context.
 
         Args:
@@ -209,9 +209,7 @@ class AppWorldGenerator(Generator):
                     + "\n\nIMPORTANT: You must respond with a SINGLE valid JSON object. Do not output raw Python code."
                 )
 
-        raise RuntimeError(
-            f"AppWorldGenerator failed to produce valid JSON after {self.max_retries} attempts."
-        ) from last_error
+        return None
 
 
 class AppWorldReflector(Reflector):

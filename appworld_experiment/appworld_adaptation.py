@@ -217,6 +217,15 @@ class AppWorldAdapterBase(AdapterBase):
                 main_user_phone_number=user_info["main_user_phone_number"],
                 trajectory_history=trajectory_history,
             )
+            
+            # Handle the case where generation fails when out of retries
+            if generator_output is None:
+                if self.logger:
+                    self.logger.error("Generator failed to produce output after maximum retries.")
+                else:
+                    import logging
+                    logging.error("Generator failed to produce output after maximum retries.")
+                break
 
             # Execute code in environment
             code = generator_output.final_answer
