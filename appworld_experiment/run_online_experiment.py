@@ -14,7 +14,6 @@ Key differences from offline adaptation:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import os
 from pathlib import Path
@@ -32,7 +31,6 @@ for candidate in (SRC, ROOT):
 
 from src.opence.methods.ace import (
     Playbook,
-    Sample,
     OpenAIClient
 )
 from appworld_experiment.run_offline_experiment import (
@@ -46,7 +44,7 @@ from appworld_experiment.appworld_roles import (
     AppWorldReflector,
     AppWorldCurator,
 )
-
+from appworld_experiment.appworld_deduplication import OllamaDeduplicator
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -128,7 +126,7 @@ def main() -> None:
 
     # Load dataset
     dataset = AppWorldDataset("/home/yanhong/appworld-server/data")
-    all_samples: List[Sample] = dataset.load_samples(split=args.split)
+    all_samples: List[AppWorldSample] = dataset.load_samples(split=args.split)
 
     # Limit samples if specified
     if args.max_samples:
@@ -172,7 +170,7 @@ def main() -> None:
         curator=curator,
         max_refinement_rounds=max_refinement_rounds,
         max_interaction_steps=max_interaction_steps,
-        deduplicator=Deduplicator(model_name=args.deduplication_model) if args.dedup_frequency > 0 else None,
+        deduplicator=OllamaDeduplicator(logger=logger, model_name=args.deduplication_model) if args.dedup_frequency > 0 else None,
         dedup_frequency=args.dedup_frequency,
         logger=logger,
     )

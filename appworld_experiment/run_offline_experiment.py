@@ -5,13 +5,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import httpx
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Optional, TYPE_CHECKING
 import os
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    from appworld_experiment.experiment_logger import ExperimentLogger
+
+# Fallback logger for when ExperimentLogger is not provided
+_fallback_logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -29,7 +36,7 @@ from src.opence.methods.ace import (
     TaskEnvironment,
     OpenAIClient
 )
-from src.opence.methods.ace.deduplication import Deduplicator
+from appworld_experiment.appworld_deduplication import OllamaDeduplicator
 from appworld_experiment.appworld_adaptation import AppWorldOfflineAdapter
 from appworld_experiment.appworld_roles import (
     AppWorldGenerator,
@@ -95,12 +102,9 @@ class AppWorldDataset:
                 ground_truth=gt_data
             )
             samples.append(sample)
+            _fallback_logger.debug(f"Successfully loaded task: {task_id}")
 
-            import logging
-            logging.debug(f"Successfully loaded task: {task_id}")
-
-        import logging
-        logging.info(f"Loaded {len(samples)} samples for split: {split}")
+        _fallback_logger.info(f"Loaded {len(samples)} samples for split: {split}")
         return samples
 
 @dataclass
@@ -124,7 +128,7 @@ class AppWorldEnvironment(TaskEnvironment):
     - Evaluation (evaluate_task, evaluate)
     """
 
-    def __init__(self, base_url: str = "http://localhost:8777", logger=None):
+    def __init__(self, base_url: str = "http://localhost:8777", logger: Optional["ExperimentLogger"] = None):
         """Initialize AppWorld environment client.
 
         Args:
@@ -133,6 +137,13 @@ class AppWorldEnvironment(TaskEnvironment):
         """
         self.client = httpx.Client(base_url=base_url, timeout=120)
         self.logger = logger
+
+    def _log_info(self, message: str) -> None:
+        """Log info message using ExperimentLogger or fallback to standard logging."""
+        if self.logger:
+            self.logger.info(message)
+        else:
+            _fallback_logger.info(message)
 
     # ==================== Session Management ====================
 
@@ -150,11 +161,7 @@ class AppWorldEnvironment(TaskEnvironment):
             "experiment_name": "ace_experiment_1"
         })
         result = response.json()
-        if self.logger:
-            self.logger.info(f"Initialized task {sample.task_id}")
-        else:
-            import logging
-            logging.info(f"Initialized task {sample.task_id}")
+        self._log_info(f"Initialized task {sample.task_id}")
         return result
 
     def close_task(self, task_id: str) -> dict:
@@ -168,11 +175,7 @@ class AppWorldEnvironment(TaskEnvironment):
         """
         response = self.client.post("/close_all", json={"task_id": task_id})
         result = response.json()
-        if self.logger:
-            self.logger.info(f"Closed task {task_id}")
-        else:
-            import logging
-            logging.info(f"Closed task {task_id}")
+        self._log_info(f"Closed task {task_id}")
         return result
 
     # ==================== Code Execution ====================
@@ -192,9 +195,8 @@ class AppWorldEnvironment(TaskEnvironment):
                 - status: execution status
                 - ... other fields from AppWorld API
         """
-        if self.logger:
-            self.logger.info(f"Executing code for task {task_id}")
-            self.logger.info(f"Code:\n{code}")
+        self._log_info(f"Executing code for task {task_id}")
+        self._log_info(f"Code:\n{code}")
 
         payload = {
             "task_id": task_id,
@@ -204,9 +206,7 @@ class AppWorldEnvironment(TaskEnvironment):
         response = self.client.post("/execute", json=payload)
         result = response.json()
 
-        if self.logger:
-            self.logger.info(f"Execution result: {result.get('status', 'unknown')}")
-            self.logger.info(f"Execution response: {response.text}")
+        self._log_info(f"Execution response: {response.text}")
         return result
 
     # ==================== Status Checking ====================
@@ -264,8 +264,7 @@ class AppWorldEnvironment(TaskEnvironment):
         }
         response = self.client.post("/evaluate", json=payload)
         result = response.json()
-        if self.logger:
-            self.logger.info(f"Unit test evaluation: {response.text}")
+        self._log_info(f"Unit test evaluation: {response.text}")
         return result
 
     def evaluate(self, sample: AppWorldSample, generator_output) -> EnvironmentResult:
@@ -439,7 +438,7 @@ def main() -> None:
         curator=curator,
         max_refinement_rounds=max_refinement_rounds,
         max_interaction_steps=max_interaction_steps,
-        deduplicator=Deduplicator(model_name=args.deduplication_model) if args.dedup_frequency > 0 else None,
+        deduplicator=OllamaDeduplicator(logger=logger, model_name=args.deduplication_model) if args.dedup_frequency > 0 else None,
         dedup_frequency=args.dedup_frequency,
         logger=logger,
     )

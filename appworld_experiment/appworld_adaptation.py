@@ -9,7 +9,8 @@ User information (first_name, last_name, email, phone) is stored in sample.metad
 
 from __future__ import annotations
 
-from typing import Iterable, List, Optional, Sequence
+import logging
+from typing import Iterable, List, Optional, Sequence, TYPE_CHECKING
 import re
 
 from src.opence.methods.ace.adaptation import (
@@ -19,7 +20,7 @@ from src.opence.methods.ace.adaptation import (
     Sample,
     TaskEnvironment,
 )
-from src.opence.methods.ace.deduplication import Deduplicator
+from appworld_experiment.appworld_deduplication import OllamaDeduplicator
 from src.opence.methods.ace.playbook import Playbook
 from appworld_experiment.appworld_roles import (
     AppWorldGenerator,
@@ -27,6 +28,12 @@ from appworld_experiment.appworld_roles import (
     AppWorldCurator,
 )
 from appworld_experiment.trajectory import Trajectory
+
+if TYPE_CHECKING:
+    from appworld_experiment.experiment_logger import ExperimentLogger
+
+# Fallback logger for when ExperimentLogger is not provided
+_fallback_logger = logging.getLogger(__name__)
 
 class AppWorldAdapterBase(AdapterBase):
     """Shared orchestration logic for AppWorld offline and online adaptation.
@@ -45,7 +52,7 @@ class AppWorldAdapterBase(AdapterBase):
         max_refinement_rounds: int = 1,
         reflection_window: int = 3,
         max_interaction_steps: int = 10,
-        logger=None,
+        logger: Optional["ExperimentLogger"] = None,
     ) -> None:
         """Initialize AppWorld adapter with AppWorld-specific roles.
 
@@ -70,6 +77,27 @@ class AppWorldAdapterBase(AdapterBase):
         )
         self.max_interaction_steps = max_interaction_steps
         self.logger = logger
+
+    def _log_info(self, message: str) -> None:
+        """Log info message using ExperimentLogger or fallback to standard logging."""
+        if self.logger:
+            self.logger.info(message)
+        else:
+            _fallback_logger.info(message)
+
+    def _log_debug(self, message: str) -> None:
+        """Log debug message using ExperimentLogger or fallback to standard logging."""
+        if self.logger:
+            self.logger.debug(message)
+        else:
+            _fallback_logger.debug(message)
+
+    def _log_error(self, message: str) -> None:
+        """Log error message using ExperimentLogger or fallback to standard logging."""
+        if self.logger:
+            self.logger.error(message)
+        else:
+            _fallback_logger.error(message)
 
     def extract_code(self, text: str) -> str:
         """
@@ -194,18 +222,14 @@ class AppWorldAdapterBase(AdapterBase):
         final_generator_output = None
 
         for interaction_step in range(1, self.max_interaction_steps + 1):
-            if self.logger:
-                self.logger.info(f"Interaction Step {interaction_step}/{self.max_interaction_steps}")
-            else:
-                import logging
-                logging.info(f"Interaction Step {interaction_step}/{self.max_interaction_steps}")
+            self._log_info(f"Interaction Step {interaction_step}/{self.max_interaction_steps}")
 
             # Set current step for generator logging
             if hasattr(self.generator, '_current_step'):
                 self.generator._current_step = interaction_step
 
             # Format trajectory history for generator
-            trajectory_history = trajectory.format_for_reflector() if trajectory.steps else ""
+            trajectory_history = trajectory.format_for_generator() if trajectory.steps else ""
 
             # Generate next step
             generator_output = self.generator.generate(
@@ -220,11 +244,7 @@ class AppWorldAdapterBase(AdapterBase):
             
             # Handle the case where generation fails when out of retries
             if generator_output is None:
-                if self.logger:
-                    self.logger.error("Generator failed to produce output after maximum retries.")
-                else:
-                    import logging
-                    logging.error("Generator failed to produce output after maximum retries.")
+                self._log_error("Generator failed to produce output after maximum retries.")
                 break
 
             # Execute code in environment
@@ -244,11 +264,7 @@ class AppWorldAdapterBase(AdapterBase):
 
             # Check if task is completed via environment API
             if environment.is_task_completed(sample.task_id):
-                if self.logger:
-                    self.logger.info("Task completion detected by environment")
-                else:
-                    import logging
-                    logging.info("Task completion detected by environment")
+                self._log_info("Task completion detected by environment")
                 is_completed = True
                 final_generator_output = generator_output
                 break
@@ -305,18 +321,13 @@ class AppWorldAdapterBase(AdapterBase):
             reflection=reflection,
             playbook=self.playbook,
             question_context=self._question_context(sample, env_result),
-            progress=self._progress_string(epoch, total_epochs, step_index, total_steps),
             final_generated_code=final_generator_output.final_answer if final_generator_output else "(no code)",
             guidebook=self._reflection_context(),  # Recent reflections
         )
 
         # Apply delta to playbook
         self.playbook.apply_delta(curator_output.delta)
-        if self.logger:
-            self.logger.debug(f"Updated playbook:\n{self.playbook.as_prompt()}")
-        else:
-            import logging
-            logging.debug(f"Updated playbook:\n{self.playbook.as_prompt()}")
+        self._log_debug(f"Updated playbook:\n{self.playbook.to_dict()}")
 
         # Calculate execution time and log metrics
         execution_time = time.time() - start_time
@@ -397,7 +408,7 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
         generator: AppWorldGenerator,
         reflector: AppWorldReflector,
         curator: AppWorldCurator,
-        deduplicator: Optional[Deduplicator] = None,
+        deduplicator: Optional[OllamaDeduplicator] = None,
         dedup_frequency: int = 0,
         max_refinement_rounds: int = 1,
         reflection_window: int = 3,
@@ -478,21 +489,13 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
                 # Sample-based deduplication (if enabled)
                 if self.deduplicator and self.dedup_frequency > 0:
                     if sample_counter % self.dedup_frequency == 0:
-                        if self.logger:
-                            self.logger.info(f"[Deduplication] Processing after {sample_counter} samples")
-                        else:
-                            import logging
-                            logging.info(f"[Deduplication] Processing after {sample_counter} samples")
+                        self._log_info(f"[Deduplication] Processing after {sample_counter} samples")
                         self.playbook.deduplicate(self.deduplicator, bullet_ids_buffer)
                         bullet_ids_buffer = []  # Clear buffer after dedup
 
         # Final deduplication for any remaining bullets in buffer
         if self.deduplicator and bullet_ids_buffer:
-            if self.logger:
-                self.logger.info(f"[Deduplication] Final processing for remaining {len(bullet_ids_buffer)} bullets")
-            else:
-                import logging
-                logging.info(f"[Deduplication] Final processing for remaining {len(bullet_ids_buffer)} bullets")
+            self._log_info(f"[Deduplication] Final processing for remaining {len(bullet_ids_buffer)} bullets")
             self.playbook.deduplicate(self.deduplicator, bullet_ids_buffer)
 
         return results
@@ -516,7 +519,7 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
             generator=AppWorldGenerator(llm),
             reflector=AppWorldReflector(llm),
             curator=AppWorldCurator(llm),
-            deduplicator=Deduplicator("all-MiniLM-L6-v2"),
+            deduplicator=OllamaDeduplicator("qwen3-embedding"),
             dedup_frequency=5,  # Deduplicate every 5 samples
         )
 
@@ -532,7 +535,7 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
         generator: AppWorldGenerator,
         reflector: AppWorldReflector,
         curator: AppWorldCurator,
-        deduplicator: Optional[Deduplicator] = None,
+        deduplicator: Optional[OllamaDeduplicator] = None,
         dedup_frequency: int = 0,
         max_refinement_rounds: int = 1,
         reflection_window: int = 3,
@@ -612,21 +615,13 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
             # Sample-based deduplication (if enabled)
             if self.deduplicator and self.dedup_frequency > 0:
                 if sample_counter % self.dedup_frequency == 0:
-                    if self.logger:
-                        self.logger.info(f"[Deduplication] Processing after {sample_counter} samples")
-                    else:
-                        import logging
-                        logging.info(f"[Deduplication] Processing after {sample_counter} samples")
+                    self._log_info(f"[Deduplication] Processing after {sample_counter} samples")
                     self.playbook.deduplicate(self.deduplicator, bullet_ids_buffer)
                     bullet_ids_buffer = []  # Clear buffer after dedup
 
         # Final deduplication for any remaining bullets in buffer
         if self.deduplicator and bullet_ids_buffer:
-            if self.logger:
-                self.logger.info(f"[Deduplication] Final processing for remaining {len(bullet_ids_buffer)} bullets")
-            else:
-                import logging
-                logging.info(f"[Deduplication] Final processing for remaining {len(bullet_ids_buffer)} bullets")
+            self._log_info(f"[Deduplication] Final processing for remaining {len(bullet_ids_buffer)} bullets")
             self.playbook.deduplicate(self.deduplicator, bullet_ids_buffer)
 
         return results

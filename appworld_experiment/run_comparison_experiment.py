@@ -19,15 +19,18 @@ This allows comparison of TGC/SGC metrics to evaluate the benefit of offline tra
 
 from __future__ import annotations
 
-import logger
 import argparse
 import json
+import logging
 import sys
 import os
 from pathlib import Path
 from typing import List
 from datetime import datetime
 from dotenv import load_dotenv
+
+# Setup module-level logger for final summary
+_logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -40,10 +43,9 @@ for candidate in (SRC, ROOT):
 
 from src.opence.methods.ace import (
     Playbook,
-    Sample,
     OpenAIClient
 )
-from src.opence.methods.ace.deduplication import Deduplicator
+from appworld_experiment.appworld_deduplication import OllamaDeduplicator
 from appworld_experiment.run_offline_experiment import (
     AppWorldDataset,
     AppWorldEnvironment,
@@ -191,7 +193,7 @@ def run_offline_training(
         generator=generator,
         reflector=reflector,
         curator=curator,
-        deduplicator=Deduplicator(args.deduplication_model) if args.dedup_frequency > 0 else None,
+        deduplicator=OllamaDeduplicator(logger=logger, model_name=args.deduplication_model) if args.dedup_frequency > 0 else None,
         dedup_frequency=args.dedup_frequency,
         max_refinement_rounds=1,
         max_interaction_steps=5,
@@ -242,7 +244,7 @@ def run_online_evaluation(
         generator=generator,
         reflector=reflector,
         curator=curator,
-        deduplicator=Deduplicator(args.deduplication_model) if args.dedup_frequency > 0 else None,
+        deduplicator=OllamaDeduplicator(logger=logger, model_name=args.deduplication_model) if args.dedup_frequency > 0 else None,
         dedup_frequency=args.dedup_frequency,
         max_refinement_rounds=1,
         max_interaction_steps=5,
@@ -280,9 +282,7 @@ def main() -> None:
     # Phase 1: Offline Training (or load pre-trained playbook)
     if args.load_playbook:
         # Load pre-trained playbook
-        
-        logger.info(f"Loading pre-trained playbook")
-        
+        _logger.info(f"Loading pre-trained playbook")
 
         offline_logger = ExperimentLogger(experiment_name=f"{base_experiment_name}_offline_loaded")
         trained_playbook = load_playbook(Path(args.load_playbook), offline_logger)
@@ -396,16 +396,14 @@ def main() -> None:
         online_without_offline_logger.log_experiment_summary()
 
     # Print final summary
-    
-    logger.info(f"EXPERIMENT COMPLETE")
-    
-    logger.info(f"Results saved in: logs/appworld_experiments/")
-    logger.info(f"  - Offline training: {offline_logger.log_dir if not args.load_playbook else 'N/A (loaded)'}")
-    logger.info(f"  - Online w/ offline: {online_with_offline_logger.log_dir}")
+    _logger.info("EXPERIMENT COMPLETE")
+    _logger.info(f"Results saved in: logs/appworld_experiments/")
+    _logger.info(f"  - Offline training: {offline_logger.log_dir if not args.load_playbook else 'N/A (loaded)'}")
+    _logger.info(f"  - Online w/ offline: {online_with_offline_logger.log_dir}")
     if not args.skip_baseline:
-        logger.info(f"  - Online w/o offline: {online_without_offline_logger.log_dir}")
-    logger.info(f"\nTrained playbook: {playbook_path}")
-    logger.info(f"\nCompare statistics_report.json files to see the impact of offline training!")
+        _logger.info(f"  - Online w/o offline: {online_without_offline_logger.log_dir}")
+    _logger.info(f"\nTrained playbook: {playbook_path}")
+    _logger.info("\nCompare statistics_report.json files to see the impact of offline training!")
     
 
 

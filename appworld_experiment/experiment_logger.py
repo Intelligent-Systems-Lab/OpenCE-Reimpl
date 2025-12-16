@@ -5,10 +5,11 @@ metrics, and debugging information.
 """
 
 import logging
+import colorlog
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Optional, List
 from dataclasses import dataclass, asdict
 
 
@@ -173,6 +174,7 @@ class ExperimentLogger:
         self.logger = logging.getLogger(f"appworld_experiment.{self.experiment_name}")
         self.logger.setLevel(logging.DEBUG)
         self.logger.handlers.clear()
+        self.logger.propagate = False
 
         # File handler (detailed logs)
         file_handler = logging.FileHandler(self.log_file, encoding='utf-8')
@@ -187,8 +189,16 @@ class ExperimentLogger:
         # Console handler (important logs only)
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.INFO)
-        console_formatter = logging.Formatter(
-            '%(levelname)s - %(message)s'
+        console_formatter = colorlog.ColoredFormatter(
+            "%(log_color)s%(asctime)s - %(levelname)s - %(message)s",
+            datefmt='%Y-%m-%d %H:%M:%S',
+            log_colors={
+                'DEBUG':    'cyan',
+                'INFO':     'green',
+                'WARNING':  'yellow',
+                'ERROR':    'red',
+                'CRITICAL': 'red,bg_white',
+            }
         )
         console_handler.setFormatter(console_formatter)
         self.logger.addHandler(console_handler)
