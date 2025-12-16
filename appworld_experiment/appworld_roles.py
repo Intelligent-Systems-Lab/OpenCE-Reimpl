@@ -32,7 +32,8 @@ Example usage:
 
 from __future__ import annotations
 
-from typing import Any, Optional, List, Sequence
+import logging
+from typing import Any, Optional, List, Sequence, TYPE_CHECKING
 
 from src.opence.models.clients import LLMClient
 from src.opence.methods.ace.roles import (
@@ -53,6 +54,12 @@ from .appworld_prompts import (
     APPWORLD_CURATOR_PROMPT,
 )
 import openai
+
+if TYPE_CHECKING:
+    from appworld_experiment.experiment_logger import ExperimentLogger
+
+# Fallback logger for when ExperimentLogger is not provided
+_fallback_logger = logging.getLogger(__name__)
 
 
 class AppWorldGenerator(Generator):
@@ -94,7 +101,7 @@ class AppWorldGenerator(Generator):
         prompt_template: str = APPWORLD_GENERATOR_PROMPT,
         *,
         max_retries: int = 3,
-        logger=None,  # ExperimentLogger instance
+        logger: Optional["ExperimentLogger"] = None,
     ) -> None:
         """Initialize AppWorldGenerator with custom prompt template.
 
@@ -112,6 +119,20 @@ class AppWorldGenerator(Generator):
         self.logger = logger
         self._current_task_id: Optional[str] = None
         self._current_step: Optional[int] = None
+
+    def _log_info(self, message: str) -> None:
+        """Log info message using ExperimentLogger or fallback to standard logging."""
+        if self.logger:
+            self.logger.info(message)
+        else:
+            _fallback_logger.info(message)
+
+    def _log_debug(self, message: str) -> None:
+        """Log debug message using ExperimentLogger or fallback to standard logging."""
+        if self.logger:
+            self.logger.debug(message)
+        else:
+            _fallback_logger.debug(message)
 
     def generate(
         self,
@@ -173,7 +194,7 @@ class AppWorldGenerator(Generator):
                         estimated_prompt_tokens=response.estimated_prompt_tokens,
                     )
 
-                self.logger.debug(f"\nAppWorldGenerator's LLM response: {response.text}\n")
+                self._log_debug(f"\nAppWorldGenerator's LLM response: {response.text}\n")
                 data = _safe_json_loads(response.text)
 
                 reasoning = str(data.get("reasoning", ""))
@@ -203,7 +224,7 @@ class AppWorldGenerator(Generator):
                 last_error = err
                 if attempt + 1 >= self.max_retries:
                     break
-                self.logger.info(f"InternalServerError encountered: {err}. Retrying...")
+                self._log_info(f"InternalServerError encountered: {err}. Retrying...")
                 prompt = (
                     base_prompt
                     + "\n\nIMPORTANT: You must respond with a SINGLE valid JSON object. Do not output raw Python code."
@@ -252,7 +273,7 @@ class AppWorldReflector(Reflector):
         prompt_template: str = APPWORLD_REFLECTOR_PROMPT,
         *,
         max_retries: int = 3,
-        logger=None,  # ExperimentLogger instance
+        logger: Optional["ExperimentLogger"] = None,
     ) -> None:
         """Initialize AppWorldReflector with custom prompt template.
 
@@ -269,6 +290,20 @@ class AppWorldReflector(Reflector):
         )
         self.logger = logger
         self._current_task_id: Optional[str] = None
+
+    def _log_info(self, message: str) -> None:
+        """Log info message using ExperimentLogger or fallback to standard logging."""
+        if self.logger:
+            self.logger.info(message)
+        else:
+            _fallback_logger.info(message)
+
+    def _log_debug(self, message: str) -> None:
+        """Log debug message using ExperimentLogger or fallback to standard logging."""
+        if self.logger:
+            self.logger.debug(message)
+        else:
+            _fallback_logger.debug(message)
 
     def reflect(
         self,
@@ -326,7 +361,7 @@ class AppWorldReflector(Reflector):
                         estimated_prompt_tokens=response.estimated_prompt_tokens,
                     )
 
-                self.logger.debug(f"\nAppWorldReflector's LLM response: {response.text}\n")
+                self._log_info(f"\nAppWorldReflector's LLM response: {response.text}\n")
                 try:
                     data = _safe_json_loads(response.text)
                     bullet_tags: List[BulletTag] = []
@@ -407,7 +442,7 @@ class AppWorldCurator(Curator):
         prompt_template: str = APPWORLD_CURATOR_PROMPT,
         *,
         max_retries: int = 3,
-        logger=None,  # ExperimentLogger instance
+        logger: Optional["ExperimentLogger"] = None,
     ) -> None:
         """Initialize AppWorldCurator with custom prompt template.
 
@@ -425,13 +460,26 @@ class AppWorldCurator(Curator):
         self.logger = logger
         self._current_task_id: Optional[str] = None
 
+    def _log_info(self, message: str) -> None:
+        """Log info message using ExperimentLogger or fallback to standard logging."""
+        if self.logger:
+            self.logger.info(message)
+        else:
+            _fallback_logger.info(message)
+
+    def _log_debug(self, message: str) -> None:
+        """Log debug message using ExperimentLogger or fallback to standard logging."""
+        if self.logger:
+            self.logger.debug(message)
+        else:
+            _fallback_logger.debug(message)
+
     def curate(
         self,
         *,
         reflection: ReflectorOutput,
         playbook: Playbook,
         question_context: str,
-        progress: str,
         final_generated_code: Optional[str] = None,
         guidebook: Optional[str] = None,
         **kwargs: Any,
@@ -442,7 +490,6 @@ class AppWorldCurator(Curator):
             reflection: ReflectorOutput from reflection phase
             playbook: Current playbook state
             question_context: Task context information
-            progress: Training progress string (for compatibility, not used in AppWorld prompt)
             final_generated_code: Final code generated by agent (last step)
             guidebook: Recent reflections summary
             **kwargs: Additional arguments passed to LLM client
@@ -479,7 +526,7 @@ class AppWorldCurator(Curator):
                     estimated_prompt_tokens=response.estimated_prompt_tokens,
                 )
 
-            self.logger.debug(f"\nAppWorldCurator's LLM response: {response.text}\n")
+            self._log_info(f"\nAppWorldCurator's LLM response: {response.text}\n")
             try:
                 data = _safe_json_loads(response.text)
                 delta = DeltaBatch.from_json(data)
