@@ -179,6 +179,7 @@ The playbook you created will be used to help answering similar questions. You n
 2.  **Avoid Redundancy:** Review the `{{current_playbook}}`. Do not add rules that already exist.
 3.  **Actionable Content:** Focus on quality over quantity. Each addition must be specific and executable.
 4.  **Format:** Return a PURE JSON object.
+5.  **Anything will required for the operation must be included in the content field.**
 
 * Task Context (the actual task instruction):
 {question_context}
@@ -208,73 +209,4 @@ Respond with a single valid JSON object only—no analysis or extra narration.
   ]
 }}
 If no updates are required, return an empty list for "operations".
-
-***Examples:**
-
-**Example 1:**
-* **Task Context:** "Find money sent to roommates since Jan 1 this year"
-* **Current Playbook:** [Basic API usage guidelines, some outdated heuristics]
-* **Current Generated Attempt:** [Code that failed because it used transaction descriptions to identify roommates instead of Phone contacts]
-* **Current Reflections:**
-    {{
-      "reasoning": "The agent failed because it tried to identify roommates by parsing Venmo transaction descriptions instead of using the Phone app's contact relationships.",
-      "key_insight": "Always resolve identities from the correct source app (Phone) before filtering transactions.",
-      "bullet_tags": [
-         {{"id": "[kb_heuristics_desc]", "tag": "harmful"}},
-         {{"id": "[kb_venmo_api]", "tag": "helpful"}}
-      ]
-    }}
-
-* **Response:**
-{{
-  "reasoning": "The reflection highlights a critical error: relying on transaction descriptions ([kb_heuristics_desc]) is unreliable, so I will remove it. The agent correctly used the Venmo API ([kb_venmo_api]), so I will tag it as helpful. Finally, I need to add a hard rule about using the Phone app for identity resolution.",
-  "operations": [
-    {{
-      "type": "REMOVE",
-      "section": null,
-      "content": null,
-      "bullet_id": "[kb_heuristics_desc]",
-      "metadata": {{"helpful": 0, "harmful": 1}}
-    }},
-    {{
-      "type": "TAG",
-      "section": null,
-      "content": null,
-      "bullet_id": "[kb_venmo_api]",
-      "metadata": {{"helpful": 1, "harmful": 0}}
-    }},
-    {{
-      "type": "ADD",
-      "section": "strategies_and_hard_rules",
-      "content": "Always resolve identities from the correct source app.\n- When you need to identify relationships (roommates, contacts), always use the Phone app's contact, and never try other heuristics from transaction descriptions.",
-      "bullet_id": null,
-      "metadata": {{"helpful": 0, "harmful": 0}}
-    }}
-  ]
-}}
-
-**Example 2:**
-* **Task Context:** "Count all playlists in Spotify"
-* **Current Playbook:** [Basic authentication and API calling guidelines]
-* **Current Generated Attempt:** [Code that used `for i in range(10)` loop and missed playlists on later pages]
-* **Current Reflections:**
-    {{
-      "reasoning": "The agent used a fixed range loop for pagination instead of properly iterating through all pages until no more results are returned. This caused incomplete data collection.",
-      "key_insight": "For pagination, many APIs return items in 'pages'. Make sure to run through all the pages using while True loop instead of fixed range.",
-      "bullet_tags": []
-    }}
-
-* **Response:**
-{{
-  "reasoning": "The reflection identifies a pagination handling error where the agent used an arbitrary fixed range. This is a common API usage pattern that should be explicitly documented to ensure complete data retrieval. No existing bullets were tagged, so I only need to ADD the new insight.",
-  "operations": [
-    {{
-      "type": "ADD",
-      "section": "apis_to_use_for_specific_information",
-      "content": "About pagination: many APIs return items in 'pages'. Make sure to run through all the pages using `while True` loop checking for empty results, instead of `for i in range(10)`.",
-      "bullet_id": null,
-      "metadata": {{"helpful": 0, "harmful": 0}}
-    }}
-  ]
-}}
 """
