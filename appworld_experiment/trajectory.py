@@ -42,6 +42,38 @@ class Trajectory:
     task: str
     is_completed: bool = False
 
+    def format_for_generator(self) -> str:
+        """Format trajectory as text for Generator input.
+
+        Returns:
+            Multi-line string representation of the trajectory showing
+            step-by-step code and observations.
+        Example:
+            ```
+            Step 1:
+            Code:
+            ```python
+            print(apis.api_docs.show_api_doc(app_name='venmo'))
+            ```
+            Observation:
+            Returns a list of transactions...
+            Step 2:
+            ...
+            ```
+        """
+        lines = []
+        for step in self.steps:
+            lines.append(f"Step {step.step_index}:")
+            lines.append("Code:")
+            lines.append("```python")
+            lines.append(step.code)
+            lines.append("```")
+            lines.append("")
+            lines.append("Observation:")
+            lines.append(step.observation)
+            lines.append("")
+        return "\n".join(lines)
+    
     def format_for_reflector(self) -> str:
         """Format trajectory as text for Reflector analysis.
 
