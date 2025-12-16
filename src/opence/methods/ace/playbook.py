@@ -218,6 +218,9 @@ class Playbook:
         for section, bullet_ids in sorted(self._sections.items()):
             parts.append(f"## {section}")
             for bullet_id in bullet_ids:
+                if bullet_id not in self._bullets:
+                    continue
+
                 bullet = self._bullets[bullet_id]
                 counters = (
                     f"(helpful={bullet.helpful}, harmful={bullet.harmful}, neutral={bullet.neutral})"
