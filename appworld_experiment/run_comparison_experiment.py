@@ -339,7 +339,7 @@ def main() -> None:
     print(f"    - Crashed: {offline_metrics['crashed_rate']:.1%}")
     print(f"  Average TGC: {offline_metrics['avg_tgc']:.2%}")
     print(f"  Average SGC: {offline_metrics['avg_sgc']:.2%}")
-    print(f"  Final playbook: {len(offline_adapter.playbook.as_prompt().split(chr(10)))} lines")
+    print(f"  Final playbook: {offline_adapter.playbook.__len__()} bullets")
 
     print(f"\nONLINE ADAPTATION (continuous learning):")
     print(f"  Test samples: {online_metrics['count']}")
@@ -349,7 +349,7 @@ def main() -> None:
     print(f"    - Crashed: {online_metrics['crashed_rate']:.1%}")
     print(f"  Average TGC: {online_metrics['avg_tgc']:.2%}")
     print(f"  Average SGC: {online_metrics['avg_sgc']:.2%}")
-    print(f"  Final playbook: {len(online_adapter.playbook.as_prompt().split(chr(10)))} lines")
+    print(f"  Final playbook: {online_adapter.playbook.__len__()} bullets")
 
     print(f"\nDIFFERENCE (Offline - Online):")
     print(f"  Completed rate: {(offline_metrics['completed_rate'] - online_metrics['completed_rate']):+.1%}")
