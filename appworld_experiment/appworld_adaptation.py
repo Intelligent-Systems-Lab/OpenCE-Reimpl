@@ -333,7 +333,7 @@ class AppWorldAdapterBase(AdapterBase):
             reflection=reflection,
             playbook=self.playbook,
             question_context=self._question_context(sample, env_result),
-            final_generated_code=final_generator_output.final_answer if final_generator_output else "(no code)",
+            final_generated_code=trajectory.format_final_step() if trajectory.steps else "(no code)",
             guidebook=self._reflection_context(),  # Recent reflections
         )
 
@@ -362,7 +362,7 @@ class AppWorldAdapterBase(AdapterBase):
                 execution_time=execution_time,
                 trajectory_length=len(sample.context),
                 num_bullet_tags=len(reflection.bullet_tags),
-                playbook_size=len(self.playbook.as_prompt().split('\n')),
+                playbook_size=self.playbook.__len__(),
                 tgc=tgc,
                 unit_tests_passed=unit_tests_passed,
                 unit_tests_total=unit_tests_total
@@ -540,7 +540,7 @@ class AppWorldAdapterBase(AdapterBase):
                 execution_time=execution_time,
                 trajectory_length=len(sample.context),
                 num_bullet_tags=0,  # No reflection in evaluation
-                playbook_size=len(self.playbook.as_prompt().split('\n')),
+                playbook_size=self.playbook.__len__(),
                 tgc=tgc,
                 unit_tests_passed=unit_tests_passed,
                 unit_tests_total=unit_tests_total
@@ -723,7 +723,7 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
 
         self._log_info("=" * 60)
         self._log_info("TRAINING PHASE COMPLETE")
-        self._log_info(f"Final playbook size: {len(self.playbook.as_prompt().split(chr(10)))} lines")
+        self._log_info(f"Final playbook size: {self.playbook.__len__()} bullets")
         self._log_info("=" * 60)
 
         # ==================== Evaluation Phase ====================
@@ -901,7 +901,7 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
         self._log_info("=" * 60)
         self._log_info("ONLINE ADAPTATION COMPLETE")
         self._log_info(f"Processed {len(results)} samples")
-        self._log_info(f"Final playbook size: {len(self.playbook.as_prompt().split(chr(10)))} lines")
+        self._log_info(f"Final playbook size: {self.playbook.__len__()} bullets")
         self._log_info("=" * 60)
 
         return results
