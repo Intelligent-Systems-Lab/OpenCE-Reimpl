@@ -256,7 +256,7 @@ def main() -> None:
             logger.info(f"  - Crashed: {test_crashed_count}/{test_count} ({test_crashed_count/test_count*100:.1f}%)")
             logger.info(f"Test average TGC: {test_avg_tgc:.2%}")
             logger.info(f"Test average SGC: {test_avg_sgc:.2%}")
-        logger.info(f"Final playbook size: {len(adapter.playbook.as_prompt().split(chr(10)))} lines")
+        logger.info(f"Final playbook size: {adapter.playbook.__len__()} bullets")
         logger.debug(f"Playbook content:\n{adapter.playbook.as_prompt() or '(playbook is empty)'}")
 
     except Exception as e:

@@ -225,11 +225,11 @@ def main() -> None:
         if count > 0:
             logger.info(f"Execution status breakdown:")
             logger.info(f"  - Completed: {completed_count}/{count} ({completed_count/count*100:.1f}%)")
-            logger.info(f"  - Max steps reached: {max_steps_count}/{count} ({max_steps_count/count*100:.1f}%)")
+            logger.info(f"  - Max turns reached: {max_steps_count}/{count} ({max_steps_count/count*100:.1f}%)")
             logger.info(f"  - Crashed: {crashed_count}/{count} ({crashed_count/count*100:.1f}%)")
             logger.info(f"Average TGC: {avg_tgc:.2%}")
             logger.info(f"Average SGC: {avg_sgc:.2%}")
-        logger.info(f"Final playbook size: {len(adapter.playbook.as_prompt().split(chr(10)) if adapter.playbook.as_prompt() else [])} lines")
+        logger.info(f"Final playbook size: {adapter.playbook.__len__()} bullets")
         logger.debug(f"Playbook content:\n{adapter.playbook.as_prompt() or '(playbook is empty)'}")
 
     except Exception as e:
