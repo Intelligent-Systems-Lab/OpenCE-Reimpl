@@ -33,11 +33,8 @@ from src.opence.methods.ace import (
     Playbook,
     OpenAIClient
 )
-from appworld_experiment.run_offline_experiment import (
-    AppWorldDataset,
-    AppWorldEnvironment,
-    AppWorldSample
-)
+from appworld_experiment.appworld_dataset import AppWorldDataset, AppWorldSample
+from appworld_experiment.appworld_environment import AppWorldEnvironment
 from appworld_experiment.appworld_adaptation import AppWorldOnlineAdapter
 from appworld_experiment.appworld_roles import (
     AppWorldGenerator,
@@ -161,10 +158,8 @@ def main() -> None:
     curator = AppWorldCurator(client, logger=logger)
 
     # Use AppWorld online adapter with logger
-    from src.opence.methods.ace.deduplication import Deduplicator
-
     adapter = AppWorldOnlineAdapter(
-        playbook=Playbook(),
+        playbook=Playbook(),  # Start with empty playbook
         generator=generator,
         reflector=reflector,
         curator=curator,
@@ -178,28 +173,64 @@ def main() -> None:
     # Create environment with logger
     environment = AppWorldEnvironment(base_url=appworld_url, logger=logger)
 
-    logger.info("Starting online adaptation with AppWorld...")
+    logger.info("=" * 60)
+    logger.info("ONLINE ADAPTATION EXPERIMENT")
+    logger.info("=" * 60)
+    logger.info("Mode: Continuous Learning")
+    logger.info("  - Each sample: Generator → Environment → Reflector → Curator")
+    logger.info("  - Playbook is updated AFTER EACH sample")
+    logger.info("  - Knowledge accumulates continuously")
     logger.info(f"Processing {len(samples)} samples from {args.split} split")
-    
-    logger.info(f"Starting online adaptation with AppWorld...")
-    logger.info(f"Processing {len(samples)} samples from {args.split} split")
-    
+    logger.info("=" * 60)
 
     try:
-        # Run online adaptation (processes samples sequentially)
+        # Run online adaptation (processes samples with continuous learning)
         results = adapter.run(samples, environment)
 
         # Log experiment summary
         logger.log_experiment_summary()
 
-        # Print summary
-        
-        logger.info(f"Online Adaptation Complete")
-        
-        logger.info(f"Processed {len(results)} samples")
-        logger.info(f"\nFinal playbook ({len(adapter.playbook.as_prompt().split(chr(10)) if adapter.playbook.as_prompt() else [])} lines):")
-        logger.info(adapter.playbook.as_prompt() or "(playbook is empty)")
-        
+        # Calculate metrics
+        if results:
+            count = len(results)
+            completed_count = sum(1 for r in results if r.environment_result.metrics.get("execution_status") == "completed")
+            max_steps_count = sum(1 for r in results if r.environment_result.metrics.get("execution_status") == "max_steps_reached")
+            crashed_count = sum(1 for r in results if r.environment_result.metrics.get("execution_status") == "crashed")
+            tgc_sum = sum(r.environment_result.metrics.get("tgc", 0) for r in results)
+            sgc_sum = sum(r.environment_result.metrics.get("sgc", 0) for r in results)
+            avg_tgc = tgc_sum / count
+            avg_sgc = sgc_sum / count
+        else:
+            count = 0
+            completed_count = max_steps_count = crashed_count = 0
+            avg_tgc = avg_sgc = 0
+
+        # Log results
+        logger.info("=" * 60)
+        logger.info("ONLINE ADAPTATION RESULTS")
+        logger.info("=" * 60)
+        for step, result in enumerate(results, start=1):
+            status = result.environment_result.metrics.get("execution_status", "unknown")
+            logger.info(f"Sample {step} - {status}")
+            logger.debug(f"  Question: {result.sample.question}")
+            logger.debug(f"  Final answer: {result.generator_output.final_answer if result.generator_output else 'N/A'}")
+            logger.debug(f"  TGC: {result.environment_result.metrics.get('tgc', 0):.2%}")
+            logger.debug(f"  SGC: {result.environment_result.metrics.get('sgc', 0):.0f}")
+
+        # Final summary
+        logger.info("=" * 60)
+        logger.info("FINAL SUMMARY")
+        logger.info("=" * 60)
+        logger.info(f"Processed {count} samples")
+        if count > 0:
+            logger.info(f"Execution status breakdown:")
+            logger.info(f"  - Completed: {completed_count}/{count} ({completed_count/count*100:.1f}%)")
+            logger.info(f"  - Max steps reached: {max_steps_count}/{count} ({max_steps_count/count*100:.1f}%)")
+            logger.info(f"  - Crashed: {crashed_count}/{count} ({crashed_count/count*100:.1f}%)")
+            logger.info(f"Average TGC: {avg_tgc:.2%}")
+            logger.info(f"Average SGC: {avg_sgc:.2%}")
+        logger.info(f"Final playbook size: {len(adapter.playbook.as_prompt().split(chr(10)) if adapter.playbook.as_prompt() else [])} lines")
+        logger.debug(f"Playbook content:\n{adapter.playbook.as_prompt() or '(playbook is empty)'}")
 
     except Exception as e:
         logger.error(f"Experiment failed with error: {str(e)}", exc_info=True)

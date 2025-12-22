@@ -1,36 +1,34 @@
 #!/usr/bin/env python3
-"""Run offline training followed by online evaluation to compare w/ and w/o offline training.
+"""Run comparison experiment: Offline vs Online adaptation.
 
-This script helps answer the research question:
-"Does offline training on the training set improve online evaluation performance on dev/test sets?"
+This script compares two adaptation strategies:
+
+1. **Offline Adaptation**:
+   - Training Phase: Learn playbook from training data (Generator → Reflector → Curator)
+   - Evaluation Phase: Test with frozen playbook (Generator only, no learning)
+
+2. **Online Adaptation**:
+   - Continuous learning on each sample (Generator → Reflector → Curator)
+   - Playbook evolves throughout evaluation
+
+Research Question:
+"Does pre-training a playbook offline improve performance compared to online learning from scratch?"
 
 Workflow:
-1. Run offline adaptation on train split (multiple epochs)
-2. Save the trained playbook
-3. Run online evaluation on dev/test split with trained playbook
-4. Compare with baseline (online evaluation without offline training)
-
-The experiment generates two sets of results:
-- With offline training: offline (train) → online (dev/test)
-- Without offline training: online (dev/test) from scratch
-
-This allows comparison of TGC/SGC metrics to evaluate the benefit of offline training.
+1. Run offline adaptation: train on train split → evaluate on test split with frozen playbook
+2. Run online adaptation: learn continuously on the same test split
+3. Compare TGC/SGC metrics between the two approaches
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-import logging
 import sys
 import os
 from pathlib import Path
 from typing import List
 from datetime import datetime
 from dotenv import load_dotenv
-
-# Setup module-level logger for final summary
-_logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -46,13 +44,12 @@ from src.opence.methods.ace import (
     OpenAIClient
 )
 from appworld_experiment.appworld_deduplication import OllamaDeduplicator
-from appworld_experiment.run_offline_experiment import (
-    AppWorldDataset,
-    AppWorldEnvironment,
-)
+from appworld_experiment.appworld_dataset import AppWorldDataset, AppWorldSample
+from appworld_experiment.appworld_environment import AppWorldEnvironment
 from appworld_experiment.appworld_adaptation import (
     AppWorldOfflineAdapter,
-    AppWorldOnlineAdapter
+    AppWorldOnlineAdapter,
+    AdapterStepResult,
 )
 from appworld_experiment.appworld_roles import (
     AppWorldGenerator,
@@ -66,44 +63,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--offline-epochs",
         type=int,
-        default=3,
-        help="Number of offline training epochs (default: 3)",
+        default=int(os.getenv("EPOCHS", "3")),
+        help="Number of offline training epochs (default: from .env or 3)",
     )
     parser.add_argument(
-        "--offline-samples",
+        "--train-samples",
         type=int,
         default=None,
-        help="Limit offline training samples (for testing). Default: use all train samples",
+        help="Limit training samples (for testing). Default: use all train samples",
     )
     parser.add_argument(
-        "--online-split",
+        "--test-split",
         type=str,
         default="dev",
         choices=["dev", "test_normal", "test_challenge"],
-        help="Split to use for online evaluation (default: dev)",
+        help="Split to use for evaluation (default: dev)",
     )
     parser.add_argument(
-        "--online-samples",
+        "--test-samples",
         type=int,
         default=None,
-        help="Limit online evaluation samples (for testing). Default: use all",
-    )
-    parser.add_argument(
-        "--skip-baseline",
-        action="store_true",
-        help="Skip baseline (w/o offline) evaluation",
+        help="Limit test samples (for testing). Default: use all",
     )
     parser.add_argument(
         "--save-playbook",
         type=str,
         default=None,
         help="Save trained playbook to specified path (default: auto-generated in logs)",
-    )
-    parser.add_argument(
-        "--load-playbook",
-        type=str,
-        default=None,
-        help="Load pre-trained playbook from specified path (skips offline training)",
     )
     parser.add_argument(
         "--model-name",
@@ -141,6 +127,12 @@ def parse_args() -> argparse.Namespace:
         default=os.getenv("APPWORLD_API_URL", "http://localhost:8777"),
         help="AppWorld API server URL (default from .env)",
     )
+    parser.add_argument(
+        "--max-interaction-steps",
+        type=int,
+        default=int(os.getenv("MAX_INTERACTION_STEPS", "5")),
+        help="Maximum interaction steps per task (default from .env)",
+    )
     return parser.parse_args()
 
 
@@ -152,114 +144,33 @@ def save_playbook(playbook: Playbook, filepath: Path, logger) -> None:
     logger.info(f"Playbook saved to: {filepath}")
 
 
-def load_playbook(filepath: Path, logger) -> Playbook:
-    """Load playbook from JSON file."""
-    with open(filepath, 'r', encoding='utf-8') as f:
-        data = f.read()
-    playbook = Playbook.loads(data)
-    logger.info(f"Playbook loaded from: {filepath}")
-    return playbook
+def calculate_metrics(results: List[AdapterStepResult]) -> dict:
+    """Calculate aggregate metrics from results."""
+    if not results:
+        return {
+            "count": 0,
+            "completed_rate": 0.0,
+            "max_steps_reached_rate": 0.0,
+            "crashed_rate": 0.0,
+            "avg_tgc": 0.0,
+            "avg_sgc": 0.0,
+        }
 
+    count = len(results)
+    completed_count = sum(1 for r in results if r.environment_result.metrics.get("execution_status") == "completed")
+    max_steps_count = sum(1 for r in results if r.environment_result.metrics.get("execution_status") == "max_steps_reached")
+    crashed_count = sum(1 for r in results if r.environment_result.metrics.get("execution_status") == "crashed")
+    tgc_sum = sum(r.environment_result.metrics.get("tgc", 0) for r in results)
+    sgc_sum = sum(r.environment_result.metrics.get("sgc", 0) for r in results)
 
-def run_offline_training(
-    args,
-    client,
-    environment,
-    dataset,
-    logger
-) -> Playbook:
-    """Run offline adaptation on train split."""
-    from appworld_experiment.experiment_logger import ExperimentConfig
-
-    
-    logger.info(f"PHASE 1: Offline Training (train split)")
-    
-
-    # Load training samples
-    all_train_samples = dataset.load_samples(split="train")
-    train_samples = all_train_samples[:args.offline_samples] if args.offline_samples else all_train_samples
-
-    logger.info(f"Offline training: {len(train_samples)} samples, {args.offline_epochs} epochs")
-    logger.info(f"Training samples: {len(train_samples)}")
-    logger.info(f"Epochs: {args.offline_epochs}\n")
-
-    # Create offline adapter with logger
-    generator = AppWorldGenerator(client, logger=logger)
-    reflector = AppWorldReflector(client, logger=logger)
-    curator = AppWorldCurator(client, logger=logger)
-
-    offline_adapter = AppWorldOfflineAdapter(
-        playbook=Playbook(),
-        generator=generator,
-        reflector=reflector,
-        curator=curator,
-        deduplicator=OllamaDeduplicator(logger=logger, model_name=args.deduplication_model) if args.dedup_frequency > 0 else None,
-        dedup_frequency=args.dedup_frequency,
-        max_refinement_rounds=1,
-        max_interaction_steps=5,
-        logger=logger,
-    )
-
-    # Run offline training
-    logger.info("Starting offline training...")
-    offline_results = offline_adapter.run(train_samples, environment, epochs=args.offline_epochs)
-
-    logger.info(f"Offline training complete: {len(offline_results)} results")
-    logger.info(f"\n✓ Offline training complete")
-    logger.info(f"  Processed: {len(offline_results)} task instances")
-    logger.info(f"  Final playbook size: {len(offline_adapter.playbook.as_prompt().split(chr(10)) if offline_adapter.playbook.as_prompt() else [])} lines\n")
-
-    return offline_adapter.playbook
-
-
-def run_online_evaluation(
-    args,
-    client,
-    environment,
-    dataset,
-    logger,
-    playbook: Playbook,
-    experiment_name_suffix: str
-) -> List:
-    """Run online evaluation on specified split."""
-    
-    logger.info(f"Online Evaluation ({experiment_name_suffix})")
-    
-
-    # Load evaluation samples
-    all_eval_samples = dataset.load_samples(split=args.online_split)
-    eval_samples = all_eval_samples[:args.online_samples] if args.online_samples else all_eval_samples
-
-    logger.info(f"Online evaluation: {len(eval_samples)} samples from {args.online_split} split")
-    logger.info(f"Evaluation samples: {len(eval_samples)} ({args.online_split} split)")
-    logger.info(f"Playbook size: {len(playbook.as_prompt().split(chr(10)) if playbook.as_prompt() else [])} lines\n")
-
-    # Create online adapter with logger
-    generator = AppWorldGenerator(client, logger=logger)
-    reflector = AppWorldReflector(client, logger=logger)
-    curator = AppWorldCurator(client, logger=logger)
-
-    online_adapter = AppWorldOnlineAdapter(
-        playbook=playbook,
-        generator=generator,
-        reflector=reflector,
-        curator=curator,
-        deduplicator=OllamaDeduplicator(logger=logger, model_name=args.deduplication_model) if args.dedup_frequency > 0 else None,
-        dedup_frequency=args.dedup_frequency,
-        max_refinement_rounds=1,
-        max_interaction_steps=5,
-        logger=logger,
-    )
-
-    # Run online evaluation
-    logger.info(f"Starting online evaluation ({experiment_name_suffix})...")
-    online_results = online_adapter.run(eval_samples, environment)
-
-    logger.info(f"Online evaluation complete: {len(online_results)} results")
-    logger.info(f"\n✓ Online evaluation complete ({experiment_name_suffix})")
-    logger.info(f"  Processed: {len(online_results)} samples\n")
-
-    return online_results
+    return {
+        "count": count,
+        "completed_rate": completed_count / count,
+        "max_steps_reached_rate": max_steps_count / count,
+        "crashed_rate": crashed_count / count,
+        "avg_tgc": tgc_sum / count,
+        "avg_sgc": sgc_sum / count,
+    }
 
 
 def main() -> None:
@@ -268,7 +179,8 @@ def main() -> None:
     args = parse_args()
 
     # Setup base experiment name
-    base_experiment_name = f"offline_then_online_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    base_experiment_name = f"comparison_{timestamp}"
 
     # Model configuration
     model_name = args.model_name
@@ -276,135 +188,181 @@ def main() -> None:
     api_key = args.api_key
     appworld_url = args.appworld_url
 
-    # Initialize dataset and environment
-    dataset = AppWorldDataset("/home/yanhong/appworld-server/data")
+    # Dataset path from environment variable
+    dataset_path = os.getenv("APPWORLD_DATA_PATH", "/home/yanhong/appworld-server/data")
 
-    # Phase 1: Offline Training (or load pre-trained playbook)
-    if args.load_playbook:
-        # Load pre-trained playbook
-        _logger.info(f"Loading pre-trained playbook")
+    # Initialize dataset
+    dataset = AppWorldDataset(dataset_path)
 
-        offline_logger = ExperimentLogger(experiment_name=f"{base_experiment_name}_offline_loaded")
-        trained_playbook = load_playbook(Path(args.load_playbook), offline_logger)
-        playbook_path = Path(args.load_playbook)
-    else:
-        # Run offline training
-        offline_logger = ExperimentLogger(experiment_name=f"{base_experiment_name}_offline")
+    # Load samples
+    all_train_samples = dataset.load_samples(split="train")
+    all_test_samples = dataset.load_samples(split=args.test_split)
 
-        # Log offline config
-        train_samples_count = len(dataset.load_samples(split="train")[:args.offline_samples] if args.offline_samples else dataset.load_samples(split="train"))
-        offline_config = ExperimentConfig(
-            experiment_name=f"{base_experiment_name}_offline",
-            model=model_name,
-            max_interaction_steps=5,
-            max_refinement_rounds=1,
-            reflection_window=3,
-            epochs=args.offline_epochs,
-            num_samples=train_samples_count,
-            timestamp=datetime.now().isoformat()
-        )
-        offline_logger.log_config(offline_config)
+    train_samples = all_train_samples[:args.train_samples] if args.train_samples else all_train_samples
+    test_samples = all_test_samples[:args.test_samples] if args.test_samples else all_test_samples
 
-        # Initialize client
-        client = OpenAIClient(
-            model=model_name,
-            api_key=api_key,
-            base_url=base_url
-        )
+    print("=" * 70)
+    print("COMPARISON EXPERIMENT: Offline vs Online Adaptation")
+    print("=" * 70)
+    print(f"Training samples: {len(train_samples)}")
+    print(f"Test samples: {len(test_samples)} ({args.test_split})")
+    print(f"Offline epochs: {args.offline_epochs}")
+    print("=" * 70)
 
-        # Create environment
-        environment = AppWorldEnvironment(base_url=appworld_url, logger=offline_logger)
-
-        # Run offline training
-        trained_playbook = run_offline_training(args, client, environment, dataset, offline_logger)
-
-        # Save trained playbook
-        if args.save_playbook:
-            playbook_path = Path(args.save_playbook)
-        else:
-            playbook_path = offline_logger.log_dir / "trained_playbook.json"
-        save_playbook(trained_playbook, playbook_path, offline_logger)
-
-        # Log offline experiment summary
-        offline_logger.log_experiment_summary()
-
-    # Phase 2: Online Evaluation with Trained Playbook
-    online_with_offline_logger = ExperimentLogger(experiment_name=f"{base_experiment_name}_online_with_offline")
-
-    # Log online config
-    eval_samples_count = len(dataset.load_samples(split=args.online_split)[:args.online_samples] if args.online_samples else dataset.load_samples(split=args.online_split))
-    online_config = ExperimentConfig(
-        experiment_name=f"{base_experiment_name}_online_with_offline",
-        model=model_name,
-        max_interaction_steps=5,
-        max_refinement_rounds=1,
-        reflection_window=3,
-        epochs=1,
-        num_samples=eval_samples_count,
-        timestamp=datetime.now().isoformat()
-    )
-    online_with_offline_logger.log_config(online_config)
-
-    # Initialize client and environment for online evaluation
+    # Initialize LLM clients
     client = OpenAIClient(
         model=model_name,
         api_key=api_key,
         base_url=base_url
     )
-    environment = AppWorldEnvironment(base_url=appworld_url, logger=online_with_offline_logger)
-
-    # Run online evaluation with trained playbook
-    online_with_offline_results = run_online_evaluation(
-        args, client, environment, dataset,
-        online_with_offline_logger,
-        trained_playbook,
-        "with offline training"
+    openai_client = OpenAIClient(
+        model="gpt-4o-mini",
+        api_key=api_key
     )
 
-    # Log online with offline experiment summary
-    online_with_offline_logger.log_experiment_summary()
+    # ==================== OFFLINE ADAPTATION ====================
+    print("\n" + "=" * 70)
+    print("PHASE 1: OFFLINE ADAPTATION")
+    print("  - Training: Learn playbook from training data")
+    print("  - Evaluation: Test with frozen playbook (Generator only)")
+    print("=" * 70)
 
-    # Phase 3: Baseline - Online Evaluation without Offline Training
-    if not args.skip_baseline:
-        online_without_offline_logger = ExperimentLogger(experiment_name=f"{base_experiment_name}_online_without_offline")
+    offline_logger = ExperimentLogger(experiment_name=f"{base_experiment_name}_offline")
 
-        # Log baseline config
-        baseline_config = ExperimentConfig(
-            experiment_name=f"{base_experiment_name}_online_without_offline",
-            model=model_name,
-            max_interaction_steps=5,
-            max_refinement_rounds=1,
-            reflection_window=3,
-            epochs=1,
-            num_samples=eval_samples_count,
-            timestamp=datetime.now().isoformat()
-        )
-        online_without_offline_logger.log_config(baseline_config)
+    offline_config = ExperimentConfig(
+        experiment_name=f"{base_experiment_name}_offline",
+        model=model_name,
+        max_interaction_steps=args.max_interaction_steps,
+        max_refinement_rounds=1,
+        reflection_window=3,
+        epochs=args.offline_epochs,
+        num_samples=len(train_samples) + len(test_samples),
+        timestamp=datetime.now().isoformat()
+    )
+    offline_logger.log_config(offline_config)
 
-        # Create new environment for baseline
-        baseline_environment = AppWorldEnvironment(base_url=appworld_url, logger=online_without_offline_logger)
+    # Create offline adapter
+    offline_generator = AppWorldGenerator(client, logger=offline_logger)
+    offline_reflector = AppWorldReflector(openai_client, logger=offline_logger)
+    offline_curator = AppWorldCurator(openai_client, logger=offline_logger)
 
-        # Run online evaluation with empty playbook (baseline)
-        online_without_offline_results = run_online_evaluation(
-            args, client, baseline_environment, dataset,
-            online_without_offline_logger,
-            Playbook(),  # Empty playbook
-            "without offline training (baseline)"
-        )
+    offline_adapter = AppWorldOfflineAdapter(
+        playbook=Playbook(),
+        generator=offline_generator,
+        reflector=offline_reflector,
+        curator=offline_curator,
+        deduplicator=OllamaDeduplicator(logger=offline_logger, model_name=args.deduplication_model) if args.dedup_frequency > 0 else None,
+        dedup_frequency=args.dedup_frequency,
+        max_refinement_rounds=1,
+        max_interaction_steps=args.max_interaction_steps,
+        logger=offline_logger,
+    )
 
-        # Log baseline experiment summary
-        online_without_offline_logger.log_experiment_summary()
+    offline_environment = AppWorldEnvironment(base_url=appworld_url, logger=offline_logger)
 
-    # Print final summary
-    _logger.info("EXPERIMENT COMPLETE")
-    _logger.info(f"Results saved in: logs/appworld_experiments/")
-    _logger.info(f"  - Offline training: {offline_logger.log_dir if not args.load_playbook else 'N/A (loaded)'}")
-    _logger.info(f"  - Online w/ offline: {online_with_offline_logger.log_dir}")
-    if not args.skip_baseline:
-        _logger.info(f"  - Online w/o offline: {online_without_offline_logger.log_dir}")
-    _logger.info(f"\nTrained playbook: {playbook_path}")
-    _logger.info("\nCompare statistics_report.json files to see the impact of offline training!")
-    
+    # Run offline adaptation (train + evaluate with frozen playbook)
+    offline_train_results, offline_test_results = offline_adapter.run(
+        train_samples=train_samples,
+        test_samples=test_samples,
+        environment=offline_environment,
+        epochs=args.offline_epochs
+    )
+
+    # Save playbook
+    if args.save_playbook:
+        playbook_path = Path(args.save_playbook)
+    else:
+        playbook_path = offline_logger.log_dir / "trained_playbook.json"
+    save_playbook(offline_adapter.playbook, playbook_path, offline_logger)
+
+    offline_logger.log_experiment_summary()
+
+    # ==================== ONLINE ADAPTATION ====================
+    print("\n" + "=" * 70)
+    print("PHASE 2: ONLINE ADAPTATION")
+    print("  - Continuous learning on test data")
+    print("  - Playbook updated after each sample")
+    print("=" * 70)
+
+    online_logger = ExperimentLogger(experiment_name=f"{base_experiment_name}_online")
+
+    online_config = ExperimentConfig(
+        experiment_name=f"{base_experiment_name}_online",
+        model=model_name,
+        max_interaction_steps=args.max_interaction_steps,
+        max_refinement_rounds=1,
+        reflection_window=3,
+        epochs=1,
+        num_samples=len(test_samples),
+        timestamp=datetime.now().isoformat()
+    )
+    online_logger.log_config(online_config)
+
+    # Create online adapter
+    online_generator = AppWorldGenerator(client, logger=online_logger)
+    online_reflector = AppWorldReflector(openai_client, logger=online_logger)
+    online_curator = AppWorldCurator(openai_client, logger=online_logger)
+
+    online_adapter = AppWorldOnlineAdapter(
+        playbook=Playbook(),  # Start with empty playbook
+        generator=online_generator,
+        reflector=online_reflector,
+        curator=online_curator,
+        deduplicator=OllamaDeduplicator(logger=online_logger, model_name=args.deduplication_model) if args.dedup_frequency > 0 else None,
+        dedup_frequency=args.dedup_frequency,
+        max_refinement_rounds=1,
+        max_interaction_steps=args.max_interaction_steps,
+        logger=online_logger,
+    )
+
+    online_environment = AppWorldEnvironment(base_url=appworld_url, logger=online_logger)
+
+    # Run online adaptation (continuous learning on test data)
+    online_results = online_adapter.run(test_samples, online_environment)
+
+    online_logger.log_experiment_summary()
+
+    # ==================== COMPARISON SUMMARY ====================
+    offline_metrics = calculate_metrics(offline_test_results)
+    online_metrics = calculate_metrics(online_results)
+
+    print("\n" + "=" * 70)
+    print("COMPARISON RESULTS")
+    print("=" * 70)
+
+    print(f"\nOFFLINE ADAPTATION (frozen playbook evaluation):")
+    print(f"  Training samples: {len(offline_train_results)}")
+    print(f"  Test samples: {offline_metrics['count']}")
+    print(f"  Execution status breakdown:")
+    print(f"    - Completed: {offline_metrics['completed_rate']:.1%}")
+    print(f"    - Max steps reached: {offline_metrics['max_steps_reached_rate']:.1%}")
+    print(f"    - Crashed: {offline_metrics['crashed_rate']:.1%}")
+    print(f"  Average TGC: {offline_metrics['avg_tgc']:.2%}")
+    print(f"  Average SGC: {offline_metrics['avg_sgc']:.2%}")
+    print(f"  Final playbook: {len(offline_adapter.playbook.as_prompt().split(chr(10)))} lines")
+
+    print(f"\nONLINE ADAPTATION (continuous learning):")
+    print(f"  Test samples: {online_metrics['count']}")
+    print(f"  Execution status breakdown:")
+    print(f"    - Completed: {online_metrics['completed_rate']:.1%}")
+    print(f"    - Max steps reached: {online_metrics['max_steps_reached_rate']:.1%}")
+    print(f"    - Crashed: {online_metrics['crashed_rate']:.1%}")
+    print(f"  Average TGC: {online_metrics['avg_tgc']:.2%}")
+    print(f"  Average SGC: {online_metrics['avg_sgc']:.2%}")
+    print(f"  Final playbook: {len(online_adapter.playbook.as_prompt().split(chr(10)))} lines")
+
+    print(f"\nDIFFERENCE (Offline - Online):")
+    print(f"  Completed rate: {(offline_metrics['completed_rate'] - online_metrics['completed_rate']):+.1%}")
+    print(f"  Average TGC: {(offline_metrics['avg_tgc'] - online_metrics['avg_tgc']):+.2%}")
+    print(f"  Average SGC: {(offline_metrics['avg_sgc'] - online_metrics['avg_sgc']):+.2%}")
+
+    print("\n" + "=" * 70)
+    print("EXPERIMENT COMPLETE")
+    print("=" * 70)
+    print(f"Offline logs: {offline_logger.log_dir}")
+    print(f"Online logs: {online_logger.log_dir}")
+    print(f"Trained playbook: {playbook_path}")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
