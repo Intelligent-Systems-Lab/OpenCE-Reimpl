@@ -138,4 +138,4 @@ class AppWorldDataset:
             _fallback_logger.debug(f"Successfully loaded task: {task_id}")
 
         _fallback_logger.info(f"Loaded {len(samples)} samples for split: {split}")
-        return samples[:1]
+        return samples
