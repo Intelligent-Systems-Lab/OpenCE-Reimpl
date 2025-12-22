@@ -66,9 +66,9 @@ class TaskMetrics:
     task_id: str
     sample_index: int
     epoch: int
-    completed: bool
+    execution_status: str  # "completed", "max_steps_reached", "crashed"
     num_steps: int
-    success: bool
+    sgc: float  # Scenario Goal Completion: 1.0 if TGC == 100%, else 0.0
     execution_time: float
     trajectory_length: int
     num_bullet_tags: int
@@ -84,15 +84,17 @@ class EpochSummary:
     """Summary statistics for an epoch."""
     epoch: int
     total_samples: int
-    completed_tasks: int
-    successful_tasks: int
+    # Execution status breakdown (ratios)
+    completed_rate: float  # Proportion of tasks with execution_status == "completed"
+    max_steps_reached_rate: float  # Proportion of tasks with execution_status == "max_steps_reached"
+    crashed_rate: float  # Proportion of tasks with execution_status == "crashed"
     avg_steps: float
     avg_execution_time: float
     playbook_size: int
     playbook_changes: int
     # AppWorld-specific metrics
     avg_tgc: float  # Average Task Goal Completion across all tasks
-    sgc: float  # Scenario Goal Completion: percentage of tasks with TGC >= threshold (e.g., 0.8)
+    avg_sgc: float  # Average SGC (proportion of tasks with TGC == 100%)
 
 
 def parse_unit_test_results(unit_test_output: str) -> tuple[int, int]:
@@ -252,12 +254,11 @@ class ExperimentLogger:
         self.task_metrics.append(metrics)
 
         # Log to console
-        status = "✓ SUCCESS" if metrics.success else "✗ FAILED"
-        self.logger.info(f"{status} - Task {metrics.task_id}")
-        self.logger.info(f"  Completed: {metrics.completed}")
+        self.logger.info(f"Task {metrics.task_id} - {metrics.execution_status}")
         self.logger.info(f"  Steps: {metrics.num_steps}")
         self.logger.info(f"  Time: {metrics.execution_time:.2f}s")
         self.logger.info(f"  TGC: {metrics.tgc:.2%} ({metrics.unit_tests_passed}/{metrics.unit_tests_total} tests passed)")
+        self.logger.info(f"  SGC: {metrics.sgc:.0f}")
         self.logger.info(f"  Playbook size: {metrics.playbook_size}")
 
         # Write to JSONL file
@@ -367,10 +368,12 @@ class ExperimentLogger:
         self.logger.info(f"EPOCH {summary.epoch} SUMMARY")
         self.logger.info("=" * 80)
         self.logger.info(f"  Total samples: {summary.total_samples}")
-        self.logger.info(f"  Completed: {summary.completed_tasks} ({summary.completed_tasks/summary.total_samples*100:.1f}%)")
-        self.logger.info(f"  Successful: {summary.successful_tasks} ({summary.successful_tasks/summary.total_samples*100:.1f}%)")
+        self.logger.info(f"  Execution status breakdown:")
+        self.logger.info(f"    - Completed: {summary.completed_rate:.1%}")
+        self.logger.info(f"    - Max steps reached: {summary.max_steps_reached_rate:.1%}")
+        self.logger.info(f"    - Crashed: {summary.crashed_rate:.1%}")
         self.logger.info(f"  Average TGC: {summary.avg_tgc:.2%}")
-        self.logger.info(f"  SGC (tasks with TGC≥80%): {summary.sgc:.2%}")
+        self.logger.info(f"  Average SGC: {summary.avg_sgc:.2%}")
         self.logger.info(f"  Avg steps: {summary.avg_steps:.1f}")
         self.logger.info(f"  Avg time: {summary.avg_execution_time:.2f}s")
         self.logger.info(f"  Playbook size: {summary.playbook_size} bullets")
@@ -384,16 +387,23 @@ class ExperimentLogger:
             return
 
         total_tasks = len(self.task_metrics)
-        completed = sum(1 for m in self.task_metrics if m.completed)
-        successful = sum(1 for m in self.task_metrics if m.success)
+
+        # Execution status breakdown
+        completed_count = sum(1 for m in self.task_metrics if m.execution_status == "completed")
+        max_steps_count = sum(1 for m in self.task_metrics if m.execution_status == "max_steps_reached")
+        crashed_count = sum(1 for m in self.task_metrics if m.execution_status == "crashed")
+
+        completed_rate = completed_count / total_tasks
+        max_steps_rate = max_steps_count / total_tasks
+        crashed_rate = crashed_count / total_tasks
+
         avg_steps = sum(m.num_steps for m in self.task_metrics) / total_tasks
         avg_time = sum(m.execution_time for m in self.task_metrics) / total_tasks
         total_time = sum(m.execution_time for m in self.task_metrics)
 
         # Calculate TGC and SGC
         avg_tgc = sum(m.tgc for m in self.task_metrics) / total_tasks
-        sgc_threshold = 0.8  # Tasks with TGC >= 80% are considered successful
-        sgc = sum(1 for m in self.task_metrics if m.tgc >= sgc_threshold) / total_tasks
+        avg_sgc = sum(m.sgc for m in self.task_metrics) / total_tasks
 
         summary = {
             "experiment_name": self.experiment_name,
@@ -401,12 +411,13 @@ class ExperimentLogger:
             "config": asdict(self.config) if self.config else None,
             "overall_stats": {
                 "total_tasks": total_tasks,
-                "completed_tasks": completed,
-                "successful_tasks": successful,
-                "completion_rate": completed / total_tasks * 100,
-                "success_rate": successful / total_tasks * 100,
+                "execution_status_breakdown": {
+                    "completed_rate": completed_rate,
+                    "max_steps_reached_rate": max_steps_rate,
+                    "crashed_rate": crashed_rate,
+                },
                 "avg_tgc": avg_tgc,
-                "sgc": sgc,
+                "avg_sgc": avg_sgc,
                 "avg_steps_per_task": avg_steps,
                 "avg_time_per_task": avg_time,
                 "total_execution_time": total_time,
@@ -427,10 +438,12 @@ class ExperimentLogger:
         self.logger.info("EXPERIMENT COMPLETE")
         self.logger.info("=" * 80)
         self.logger.info(f"  Total tasks: {total_tasks}")
-        self.logger.info(f"  Completion rate: {completed/total_tasks*100:.1f}%")
-        self.logger.info(f"  Success rate: {successful/total_tasks*100:.1f}%")
+        self.logger.info(f"  Execution status breakdown:")
+        self.logger.info(f"    - Completed: {completed_rate:.1%}")
+        self.logger.info(f"    - Max steps reached: {max_steps_rate:.1%}")
+        self.logger.info(f"    - Crashed: {crashed_rate:.1%}")
         self.logger.info(f"  Average TGC: {avg_tgc:.2%}")
-        self.logger.info(f"  SGC (tasks with TGC≥80%): {sgc:.2%}")
+        self.logger.info(f"  Average SGC: {avg_sgc:.2%}")
         self.logger.info(f"  Average steps: {avg_steps:.1f}")
         self.logger.info(f"  Average time: {avg_time:.2f}s")
         self.logger.info(f"  Total time: {total_time:.2f}s ({total_time/60:.1f} min)")
@@ -443,6 +456,7 @@ class ExperimentLogger:
         This report includes:
         - Model information
         - Overall TGC and SGC metrics
+        - Execution status breakdown
         - Per-task breakdown
         - Statistical analysis (min, max, std, quartiles)
         """
@@ -453,8 +467,11 @@ class ExperimentLogger:
 
         # Basic statistics
         total_tasks = len(self.task_metrics)
-        completed = sum(1 for m in self.task_metrics if m.completed)
-        successful = sum(1 for m in self.task_metrics if m.success)
+
+        # Execution status breakdown
+        completed_count = sum(1 for m in self.task_metrics if m.execution_status == "completed")
+        max_steps_count = sum(1 for m in self.task_metrics if m.execution_status == "max_steps_reached")
+        crashed_count = sum(1 for m in self.task_metrics if m.execution_status == "crashed")
 
         # TGC statistics
         tgc_values = [m.tgc for m in self.task_metrics]
@@ -464,21 +481,21 @@ class ExperimentLogger:
         std_tgc = statistics.stdev(tgc_values) if total_tasks > 1 else 0.0
         median_tgc = statistics.median(tgc_values)
 
-        # SGC calculation
-        sgc_threshold = 0.8
-        sgc_count = sum(1 for m in self.task_metrics if m.tgc >= sgc_threshold)
-        sgc_percentage = sgc_count / total_tasks
+        # SGC calculation (average of all sgc values)
+        avg_sgc = sum(m.sgc for m in self.task_metrics) / total_tasks
+        sgc_count = sum(1 for m in self.task_metrics if m.sgc == 1.0)
 
-        # Per-task TGC breakdown
+        # Per-task breakdown
         task_breakdown = []
         for m in self.task_metrics:
             task_breakdown.append({
                 "task_id": m.task_id,
+                "execution_status": m.execution_status,
                 "tgc": round(m.tgc, 4),
                 "tgc_percentage": f"{m.tgc*100:.2f}%",
+                "sgc": m.sgc,
                 "unit_tests_passed": m.unit_tests_passed,
                 "unit_tests_total": m.unit_tests_total,
-                "completed": m.completed,
                 "num_steps": m.num_steps,
                 "execution_time": round(m.execution_time, 2)
             })
@@ -489,7 +506,8 @@ class ExperimentLogger:
             "20-40%": sum(1 for t in tgc_values if 0.2 <= t < 0.4),
             "40-60%": sum(1 for t in tgc_values if 0.4 <= t < 0.6),
             "60-80%": sum(1 for t in tgc_values if 0.6 <= t < 0.8),
-            "80-100%": sum(1 for t in tgc_values if 0.8 <= t <= 1.0),
+            "80-100%": sum(1 for t in tgc_values if 0.8 <= t < 1.0),
+            "100%": sum(1 for t in tgc_values if t == 1.0),
         }
 
         # Build statistics report
@@ -503,8 +521,11 @@ class ExperimentLogger:
             },
 
             "overall_metrics": {
-                "completion_rate": f"{completed/total_tasks*100:.2f}%",
-                "success_rate": f"{successful/total_tasks*100:.2f}%",
+                "execution_status_breakdown": {
+                    "completed_rate": f"{completed_count/total_tasks*100:.2f}%",
+                    "max_steps_reached_rate": f"{max_steps_count/total_tasks*100:.2f}%",
+                    "crashed_rate": f"{crashed_count/total_tasks*100:.2f}%",
+                },
 
                 "tgc_overall": {
                     "average": f"{avg_tgc*100:.2f}%",
@@ -516,10 +537,9 @@ class ExperimentLogger:
                 },
 
                 "sgc_overall": {
-                    "percentage": f"{sgc_percentage*100:.2f}%",
+                    "average": f"{avg_sgc*100:.2f}%",
                     "count": f"{sgc_count}/{total_tasks}",
-                    "threshold": f"{sgc_threshold*100:.0f}%",
-                    "raw_percentage": round(sgc_percentage, 4)
+                    "raw_average": round(avg_sgc, 4)
                 }
             },
 
