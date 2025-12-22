@@ -238,6 +238,10 @@ class Playbook:
                 "neutral": sum(b.neutral for b in self._bullets.values()),
             },
         }
+    
+    def __len__(self) -> int:
+        """Return the number of bullets in the playbook."""
+        return sum(len(section_bullets) for section_bullets in self._sections.values())
 
     # ------------------------------------------------------------------ #
     # Internal helpers
