@@ -24,8 +24,7 @@ Example usage:
         main_user_first_name="John",
         main_user_last_name="Doe",
         main_user_email="john@example.com",
-        main_user_phone_number="+1234567890",
-        few_shot_examples="[Example 1]...",
+        main_user_phone_number="+1234567890"
     )
     ```
 """
@@ -33,7 +32,9 @@ Example usage:
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, List, Sequence, TYPE_CHECKING
+from typing import Any, Optional, Dict, List, Sequence, TYPE_CHECKING
+import re
+import ast
 
 from src.opence.models.clients import LLMClient
 from src.opence.methods.ace.roles import (
@@ -44,7 +45,6 @@ from src.opence.methods.ace.roles import (
     ReflectorOutput,
     CuratorOutput,
     BulletTag,
-    _safe_json_loads,
     _format_optional
 )
 from src.opence.methods.ace.playbook import Playbook
@@ -62,6 +62,125 @@ if TYPE_CHECKING:
 _fallback_logger = logging.getLogger(__name__)
 
 
+def _markdown_parser(md_text: str, schema: dict) -> dict:
+    """
+    Parses Markdown text into a JSON object based on a strict schema.
+
+    This function extracts sections from a Markdown string (denoted by headers like `### Key`)
+    and maps them to a dictionary. It enforces strict validation for existence of keys
+    but allows for flexibility regarding extra content.
+
+    Args:
+        md_text (str): The raw Markdown output string from the LLM.
+        schema (dict): A dictionary defining the required keys and type inference hints.
+                       Format: {"required_key": "any_value_for_type_inference"}
+                       The values in the schema are NOT used as defaults; they are only used
+                       to infer if the parser should attempt to parse the content as a list.
+
+    Returns:
+        str: A JSON string representing the parsed data.
+
+    Raises:
+        ValueError: If any key defined in the `schema` is missing from the `md_text`.
+
+    Behavior:
+        1. Missing Keys -> Raise ValueError (Strict enforcement).
+        2. Extra Keys   -> Ignore (Do not include in the final result).
+    """
+
+    # ==========================================
+    # 1. Pre-processing: Parse raw Markdown structure
+    # ==========================================
+    lines = md_text.strip().split('\n')
+    raw_data = {}
+    current_key = None
+    current_content = []
+    in_code_block = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Handle code block markers to avoid parsing headers inside code
+        if stripped.startswith("```"):
+            in_code_block = not in_code_block
+
+        # Detect headers (must be outside code blocks)
+        # Regex matches lines starting with one or more '#' followed by whitespace
+        if not in_code_block and re.match(r'^#+\s+', stripped):
+            # Save the previous section if it exists
+            if current_key:
+                raw_data[current_key] = "\n".join(current_content).strip()
+
+            # Normalize header: remove '#', strip whitespace, convert to lowercase, spaces to underscores
+            # Example: "### Python Code" -> "python_code"
+            header_text = re.sub(r'^#+\s+', '', stripped).strip()
+            normalized_key = header_text.lower().replace(" ", "_")
+
+            current_key = normalized_key
+            current_content = []
+        else:
+            current_content.append(line)
+
+    # Save the last section after the loop finishes
+    if current_key:
+        raw_data[current_key] = "\n".join(current_content).strip()
+
+    # ==========================================
+    # 2. Validate Missing Keys
+    # ==========================================
+
+    required_keys = set(schema.keys())
+    found_keys = set(raw_data.keys())
+
+    # Calculate keys that are present in schema but missing in raw_data
+    missing_keys = required_keys - found_keys
+
+    if missing_keys:
+        error_msg = f"Parsing Error: Missing required keys in output: {list(missing_keys)}"
+        print(error_msg)
+        raise ValueError(error_msg)
+
+    # ==========================================
+    # 3. Assemble Result (Filter by Schema, ignore extras)
+    # ==========================================
+    final_result = {}
+
+    # Iterate only through keys defined in the schema.
+    # This automatically ignores any extra keys found in raw_data.
+    for key in schema.keys():
+        content = raw_data[key]
+
+        # --- Smart Content Cleaning ---
+
+        # 1. Attempt to remove ```python ... ``` code block wrappers
+        code_match = re.search(r'^```\w*\n(.*?)\n```$', content, re.DOTALL)
+        if code_match:
+            final_result[key] = code_match.group(1).strip()
+            continue
+
+        # 2. Attempt to parse List
+        # We use the value provided in the schema to infer if we expect a List.
+        # Or if the content string strictly looks like a list structure.
+        expected_val = schema[key]
+        if isinstance(expected_val, list) or (content.startswith("[") and content.endswith("]")):
+            try:
+                # Handle "None" text specifically
+                if content.lower() == "none":
+                    final_result[key] = []
+                else:
+                    parsed = ast.literal_eval(content)
+                    if isinstance(parsed, list):
+                        final_result[key] = parsed
+                continue
+            except:
+                # If parsing fails, fall through to default text handling
+                pass
+
+        # 3. Default: keep as raw text
+        final_result[key] = content
+
+    return final_result
+
 class AppWorldGenerator(Generator):
     """AppWorld-specific Generator that handles AppWorld task format.
 
@@ -76,6 +195,7 @@ class AppWorldGenerator(Generator):
             {playbook}, {task}, {main_user_first_name}, {main_user_last_name},
             {main_user_email}, {main_user_phone_number}, {few_shot_examples}
         max_retries: Maximum number of retry attempts for JSON parsing
+        schema: Schema dict defining required output keys and type hints
 
     Example:
         ```python
@@ -89,8 +209,7 @@ class AppWorldGenerator(Generator):
             main_user_first_name="Jane",
             main_user_last_name="Smith",
             main_user_email="jane@example.com",
-            main_user_phone_number="+1987654321",
-            few_shot_examples="[Example demonstrations]",
+            main_user_phone_number="+1987654321"
         )
         ```
     """
@@ -102,6 +221,11 @@ class AppWorldGenerator(Generator):
         *,
         max_retries: int = 3,
         logger: Optional["ExperimentLogger"] = None,
+        schema: Optional[Dict[str, Any]] = {
+            "reasoning": "",
+            "bullet_ids": [],
+            "final_answer": ""
+        }
     ) -> None:
         """Initialize AppWorldGenerator with custom prompt template.
 
@@ -119,6 +243,7 @@ class AppWorldGenerator(Generator):
         self.logger = logger
         self._current_task_id: Optional[str] = None
         self._current_step: Optional[int] = None
+        self.schema = schema
 
     def _log_info(self, message: str) -> None:
         """Log info message using ExperimentLogger or fallback to standard logging."""
@@ -175,7 +300,6 @@ class AppWorldGenerator(Generator):
         )
 
         prompt = base_prompt
-        last_error: Optional[Exception] = None
 
         for attempt in range(self.max_retries):
             try:
@@ -195,7 +319,7 @@ class AppWorldGenerator(Generator):
                     )
 
                 self._log_debug(f"\nAppWorldGenerator's LLM response: {response.text}\n")
-                data = _safe_json_loads(response.text)
+                data = _markdown_parser(response.text, self.schema)
 
                 reasoning = str(data.get("reasoning", ""))
                 final_answer = str(data.get("final_answer", ""))
@@ -212,22 +336,23 @@ class AppWorldGenerator(Generator):
                     raw=data,
                 )
             except ValueError as err:
-                last_error = err
                 if attempt + 1 >= self.max_retries:
                     break
                 prompt = (
                     base_prompt
-                    + "\n\nIMPORTANT: You must output a single valid JSON object only. "
-                    "Escape all quotes properly and avoid any extra text outside the JSON."
+                    + "\n\nIMPORTANT: You must output a single Text object only."
+                    " Obey the Markdown format strictly."
+                    " Do not include any explanations or text outside the required format."
                 )
-            except openai.InternalServerError as err:  
-                last_error = err
+            except openai.InternalServerError as err:
                 if attempt + 1 >= self.max_retries:
                     break
                 self._log_info(f"InternalServerError encountered: {err}. Retrying...")
                 prompt = (
                     base_prompt
-                    + "\n\nIMPORTANT: You must respond with a SINGLE valid JSON object. Do not output raw Python code."
+                    + "\n\nIMPORTANT: You must respond with a SINGLE Text object only."
+                    " Obey the Markdown format strictly."
+                    " Do not include any explanations or text outside the required format."
                 )
 
         return None
@@ -244,6 +369,7 @@ class AppWorldReflector(Reflector):
         prompt_template: Custom prompt template string. Must include placeholders:
             {question}, {reasoning}, {prediction}, {ground_truth}, {feedback}, {playbook_excerpt}
         max_retries: Maximum number of retry attempts for JSON parsing
+        schema: Schema dict defining required output keys and type hints
 
     Example:
         ```python
@@ -274,6 +400,14 @@ class AppWorldReflector(Reflector):
         *,
         max_retries: int = 3,
         logger: Optional["ExperimentLogger"] = None,
+        schema: Optional[Dict[str, Any]] = {
+            "reasoning": "",
+            "error_identification": "",
+            "root_cause_analysis": "",
+            "correct_approach": "", 
+            "key_insight": "",
+            "bullet_tags": []
+        }
     ) -> None:
         """Initialize AppWorldReflector with custom prompt template.
 
@@ -290,6 +424,7 @@ class AppWorldReflector(Reflector):
         )
         self.logger = logger
         self._current_task_id: Optional[str] = None
+        self.schema = schema
 
     def _log_info(self, message: str) -> None:
         """Log info message using ExperimentLogger or fallback to standard logging."""
@@ -363,7 +498,7 @@ class AppWorldReflector(Reflector):
 
                 self._log_info(f"\nAppWorldReflector's LLM response: {response.text}\n")
                 try:
-                    data = _safe_json_loads(response.text)
+                    data = _markdown_parser(response.text, self.schema)
                     bullet_tags: List[BulletTag] = []
                     tags_payload = data.get("bullet_tags", [])
                     if isinstance(tags_payload, Sequence):
@@ -394,12 +529,13 @@ class AppWorldReflector(Reflector):
                         break
                     prompt = (
                         base_prompt
-                        + "\n\nIMPORTANT: Output only valid JSON. "
-                        "Escape all quotes properly and avoid extra text."
+                        + "\n\nIMPORTANT: You must output a single Text object only."
+                        " Obey the Markdown format strictly."
+                        " Do not include any explanations or text outside the required format."
                     )
         if result is None:
             raise RuntimeError(
-                f"AppWorldReflector failed to produce valid JSON after {self.max_retries} attempts."
+                f"AppWorldReflector failed to produce valid Markdown after {self.max_retries} attempts."
             ) from last_error
         return result
 
@@ -443,6 +579,10 @@ class AppWorldCurator(Curator):
         *,
         max_retries: int = 3,
         logger: Optional["ExperimentLogger"] = None,
+        schema: Optional[Dict[str, Any]] = {
+            "reasoning": "",
+            "operations": []
+        }
     ) -> None:
         """Initialize AppWorldCurator with custom prompt template.
 
@@ -451,6 +591,7 @@ class AppWorldCurator(Curator):
             prompt_template: Custom prompt template (defaults to APPWORLD_CURATOR_PROMPT)
             max_retries: Maximum retry attempts for JSON parsing
             logger: ExperimentLogger instance for token usage logging
+            schema: Schema dict defining required output keys and type hints
         """
         super().__init__(
             llm=llm,
@@ -459,6 +600,7 @@ class AppWorldCurator(Curator):
         )
         self.logger = logger
         self._current_task_id: Optional[str] = None
+        self.schema = schema
 
     def _log_info(self, message: str) -> None:
         """Log info message using ExperimentLogger or fallback to standard logging."""
@@ -528,7 +670,7 @@ class AppWorldCurator(Curator):
 
             self._log_info(f"\nAppWorldCurator's LLM response: {response.text}\n")
             try:
-                data = _safe_json_loads(response.text)
+                data = _markdown_parser(response.text, self.schema)
                 delta = DeltaBatch.from_json(data)
                 return CuratorOutput(delta=delta, raw=data)
             except ValueError as err:
@@ -537,10 +679,11 @@ class AppWorldCurator(Curator):
                     break
                 prompt = (
                     base_prompt
-                    + "\n\nIMPORTANT: Output only valid JSON. "
-                    "Escape all quotes properly and avoid extra text."
+                    + "\n\nIMPORTANT: You must output a single Text object only."
+                    " Obey the Markdown format strictly."
+                    " Do not include any explanations or text outside the required format."
                 )
 
         raise RuntimeError(
-            f"AppWorldCurator failed to produce valid JSON after {self.max_retries} attempts."
+            f"AppWorldCurator failed to produce valid Markdown after {self.max_retries} attempts."
         ) from last_error
