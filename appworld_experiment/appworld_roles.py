@@ -45,7 +45,8 @@ from src.opence.methods.ace.roles import (
     ReflectorOutput,
     CuratorOutput,
     BulletTag,
-    _format_optional
+    _format_optional,
+    _safe_json_loads,
 )
 from src.opence.methods.ace.playbook import Playbook
 from .appworld_prompts import (
@@ -318,8 +319,12 @@ class AppWorldGenerator(Generator):
                         estimated_prompt_tokens=response.estimated_prompt_tokens,
                     )
 
-                self._log_debug(f"\nAppWorldGenerator's LLM response: {response.text}\n")
-                data = _markdown_parser(response.text, self.schema)
+                self._log_info(f"\nAppWorldGenerator's LLM response: {response.text}\n")
+
+                if response.text.strip().startswith('{'):
+                    data = _safe_json_loads(response.text)
+                else:
+                    data = _markdown_parser(response.text, self.schema)
 
                 reasoning = str(data.get("reasoning", ""))
                 final_answer = str(data.get("final_answer", ""))
@@ -498,7 +503,12 @@ class AppWorldReflector(Reflector):
 
                 self._log_info(f"\nAppWorldReflector's LLM response: {response.text}\n")
                 try:
-                    data = _markdown_parser(response.text, self.schema)
+                    # Auto-detect format: check if response starts with '{' for JSON, otherwise use Markdown
+                    if response.text.strip().startswith('{'):
+                        data = _safe_json_loads(response.text)
+                    else:
+                        data = _markdown_parser(response.text, self.schema)
+
                     bullet_tags: List[BulletTag] = []
                     tags_payload = data.get("bullet_tags", [])
                     if isinstance(tags_payload, Sequence):
@@ -670,9 +680,15 @@ class AppWorldCurator(Curator):
 
             self._log_info(f"\nAppWorldCurator's LLM response: {response.text}\n")
             try:
-                data = _markdown_parser(response.text, self.schema)
+                # Auto-detect format: check if response starts with '{' for JSON, otherwise use Markdown
+                if response.text.strip().startswith('{'):
+                    data = _safe_json_loads(response.text)
+                else:
+                    data = _markdown_parser(response.text, self.schema)
+
                 delta = DeltaBatch.from_json(data)
                 return CuratorOutput(delta=delta, raw=data)
+            
             except ValueError as err:
                 last_error = err
                 if attempt + 1 >= self.max_retries:
