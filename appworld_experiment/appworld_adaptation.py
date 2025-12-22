@@ -10,6 +10,7 @@ User information (first_name, last_name, email, phone) is stored in sample.metad
 from __future__ import annotations
 
 import logging
+from enum import Enum
 from typing import Iterable, List, Optional, Sequence, TYPE_CHECKING
 import re
 
@@ -34,6 +35,12 @@ if TYPE_CHECKING:
 
 # Fallback logger for when ExperimentLogger is not provided
 _fallback_logger = logging.getLogger(__name__)
+
+class ExecutionStatus(Enum):
+    """Execution status for a task."""
+    COMPLETED = "completed"  # Task completed successfully
+    MAX_STEPS_REACHED = "max_steps_reached"  # Hit max interaction steps without completing
+    CRASHED = "crashed"  # Execution failed due to error
 
 class AppWorldAdapterBase(AdapterBase):
     """Shared orchestration logic for AppWorld offline and online adaptation.
@@ -165,9 +172,7 @@ class AppWorldAdapterBase(AdapterBase):
         environment: TaskEnvironment,
         *,
         epoch: int,
-        total_epochs: int,
         step_index: int,
-        total_steps: int,
     ) -> AdapterStepResult:
         """Process a single AppWorld sample through multi-step interaction.
 
@@ -179,9 +184,7 @@ class AppWorldAdapterBase(AdapterBase):
             sample: Sample to process (AppWorldSample with metadata)
             environment: Task environment for evaluation
             epoch: Current epoch number
-            total_epochs: Total number of epochs
             step_index: Current step index in epoch
-            total_steps: Total number of steps in epoch
 
         Returns:
             AdapterStepResult containing all outputs from the pipeline
@@ -218,7 +221,7 @@ class AppWorldAdapterBase(AdapterBase):
         environment.initialize_task(sample)
 
         # Multi-step interaction loop
-        is_completed = False
+        execution_status = ExecutionStatus.MAX_STEPS_REACHED  # Default status
         final_generator_output = None
 
         for interaction_step in range(1, self.max_interaction_steps + 1):
@@ -231,49 +234,55 @@ class AppWorldAdapterBase(AdapterBase):
             # Format trajectory history for generator
             trajectory_history = trajectory.format_for_generator() if trajectory.steps else ""
 
-            # Generate next step
-            generator_output = self.generator.generate(
-                task=sample.question,
-                playbook=self.playbook,
-                main_user_first_name=user_info["main_user_first_name"],
-                main_user_last_name=user_info["main_user_last_name"],
-                main_user_email=user_info["main_user_email"],
-                main_user_phone_number=user_info["main_user_phone_number"],
-                trajectory_history=trajectory_history,
-            )
-            
-            # Handle the case where generation fails when out of retries
-            if generator_output is None:
-                self._log_error("Generator failed to produce output after maximum retries.")
-                break
+            try:
+                # Generate next step
+                generator_output = self.generator.generate(
+                    task=sample.question,
+                    playbook=self.playbook,
+                    main_user_first_name=user_info["main_user_first_name"],
+                    main_user_last_name=user_info["main_user_last_name"],
+                    main_user_email=user_info["main_user_email"],
+                    main_user_phone_number=user_info["main_user_phone_number"],
+                    trajectory_history=trajectory_history,
+                )
 
-            # Execute code in environment
-            code = generator_output.final_answer
-            exec_result = environment.execute_code(sample.task_id, self.extract_code(code))
+                # Handle the case where generation fails when out of retries
+                if generator_output is None:
+                    self._log_error("Generator failed to produce output after maximum retries.")
+                    execution_status = ExecutionStatus.CRASHED
+                    break
 
-            # Format observation
-            observation = f"Output: {exec_result.get('output', '')}\n"
+                # Execute code in environment
+                code = generator_output.final_answer
+                exec_result = environment.execute_code(sample.task_id, self.extract_code(code))
 
-            # Add step to trajectory
-            trajectory.add_step(
-                reasoning=generator_output.reasoning,
-                bullet_ids=generator_output.bullet_ids,
-                code=code,
-                observation=observation,
-            )
+                # Format observation
+                observation = f"Output: {exec_result.get('output', '')}\n"
 
-            # Check if task is completed via environment API
-            if environment.is_task_completed(sample.task_id):
-                self._log_info("Task completion detected by environment")
-                is_completed = True
+                # Add step to trajectory
+                trajectory.add_step(
+                    reasoning=generator_output.reasoning,
+                    bullet_ids=generator_output.bullet_ids,
+                    code=code,
+                    observation=observation,
+                )
+
+                # Check if task is completed via environment API
+                if environment.is_task_completed(sample.task_id):
+                    self._log_info("Task completion detected by environment")
+                    execution_status = ExecutionStatus.COMPLETED
+                    final_generator_output = generator_output
+                    break
+
                 final_generator_output = generator_output
+
+            except Exception as e:
+                self._log_error(f"Execution crashed: {str(e)}")
+                execution_status = ExecutionStatus.CRASHED
                 break
 
-            final_generator_output = generator_output
-
-        # Get final task status
-        task_status = environment.check_task_completion(sample.task_id)
-        trajectory.is_completed = task_status.get("output", False) or is_completed
+        # Save final task status
+        trajectory.execution_status = execution_status.value
 
         # Get unit test results
         unit_test_result = environment.evaluate_task(sample.task_id)
@@ -283,6 +292,8 @@ class AppWorldAdapterBase(AdapterBase):
         from appworld_experiment.experiment_logger import parse_unit_test_results
         unit_tests_passed, unit_tests_total = parse_unit_test_results(unit_test_output)
         tgc = unit_tests_passed / unit_tests_total if unit_tests_total > 0 else 0.0
+        # SGC = 1 if TGC is 100%, else 0
+        sgc = 1.0 if tgc == 1.0 else 0.0
 
         # Close task
         environment.close_task(sample.task_id)
@@ -292,12 +303,13 @@ class AppWorldAdapterBase(AdapterBase):
 
         # Create final environment result
         env_result = EnvironmentResult(
-            feedback=f"Task completed in {len(trajectory.steps)} steps. Status: {'Completed' if trajectory.is_completed else 'Incomplete'}",
+            feedback=f"Task completed in {len(trajectory.steps)} steps. Status: {execution_status.value}",
             ground_truth=sample.ground_truth,
             metrics={
-                "completed": 1.0 if trajectory.is_completed else 0.0,
+                "execution_status": execution_status.value,
                 "num_steps": len(trajectory.steps),
                 "tgc": tgc,
+                "sgc": sgc,
                 "unit_tests_passed": unit_tests_passed,
                 "unit_tests_total": unit_tests_total
             }
@@ -327,30 +339,26 @@ class AppWorldAdapterBase(AdapterBase):
 
         # Apply delta to playbook
         self.playbook.apply_delta(curator_output.delta)
-        self._log_debug(f"Updated playbook:\n{self.playbook.to_dict()}")
+        self._log_debug(f"Updated playbook:\n{self.playbook.as_prompt()}")
 
         # Calculate execution time and log metrics
         execution_time = time.time() - start_time
 
         if self.logger:
-            from appworld_experiment.experiment_logger import TaskMetrics, parse_unit_test_results
+            from appworld_experiment.experiment_logger import TaskMetrics
 
             # Save trajectory
             task_id = getattr(sample, 'task_id', f'sample_{step_index}')
             self.logger.log_trajectory(task_id, sample.context)
-
-            # Parse unit test results to calculate TGC
-            unit_tests_passed, unit_tests_total = parse_unit_test_results(unit_test_output)
-            tgc = unit_tests_passed / unit_tests_total if unit_tests_total > 0 else 0.0
 
             # Log task metrics
             metrics = TaskMetrics(
                 task_id=task_id,
                 sample_index=step_index,
                 epoch=epoch,
-                completed=trajectory.is_completed,
+                execution_status=execution_status.value,
                 num_steps=len(trajectory.steps),
-                success=trajectory.is_completed,  # Can be refined based on unit test results
+                sgc=sgc,
                 execution_time=execution_time,
                 trajectory_length=len(sample.context),
                 num_bullet_tags=len(reflection.bullet_tags),
@@ -369,16 +377,213 @@ class AppWorldAdapterBase(AdapterBase):
             curator_output=curator_output,
             playbook_snapshot=self.playbook.as_prompt(),
         )
+    
+    def _evaluation_sample(
+        self,
+        sample: Sample,
+        environment: TaskEnvironment,
+        *,
+        step_index: int,
+    ) -> AdapterStepResult:
+        """Process a single AppWorld sample for evaluation with frozen playbook.
+
+        In evaluation mode, only the Generator executes. Reflector and Curator
+        are NOT called, so the playbook remains unchanged.
+
+        Args:
+            sample: Sample to process (AppWorldSample with metadata)
+            environment: Task environment for evaluation
+            step_index: Current step index in evaluation
+            total_steps: Total number of steps in evaluation
+        Returns:
+            AdapterStepResult containing generator outputs and environment results
+        """
+        import time
+        start_time = time.time()
+
+        # Get task_id for logging
+        task_id = getattr(sample, 'task_id', f'sample_{step_index}')
+
+        # Set task_id in generator for token logging
+        if hasattr(self.generator, '_current_task_id'):
+            self.generator._current_task_id = task_id
+
+        # Log task start
+        if self.logger:
+            self.logger.log_task_start(
+                task_id=task_id,
+                sample_index=step_index,
+                epoch=0  # Use 0 to indicate evaluation phase
+            )
+
+        # Extract user info from metadata
+        user_info = self._extract_user_info(sample)
+
+        # Initialize trajectory
+        trajectory = Trajectory(task=sample.question, steps=[])
+
+        # Initialize task in environment
+        environment.initialize_task(sample)
+
+        # Multi-step interaction loop (Generator only, no Reflector/Curator)
+        execution_status = ExecutionStatus.MAX_STEPS_REACHED  # Default status
+        final_generator_output = None
+
+        for interaction_step in range(1, self.max_interaction_steps + 1):
+            self._log_info(f"[Evaluation] Interaction Step {interaction_step}/{self.max_interaction_steps}")
+
+            # Set current step for generator logging
+            if hasattr(self.generator, '_current_step'):
+                self.generator._current_step = interaction_step
+
+            # Format trajectory history for generator
+            trajectory_history = trajectory.format_for_generator() if trajectory.steps else ""
+
+            try:
+                # Generate next step
+                generator_output = self.generator.generate(
+                    task=sample.question,
+                    playbook=self.playbook,
+                    main_user_first_name=user_info["main_user_first_name"],
+                    main_user_last_name=user_info["main_user_last_name"],
+                    main_user_email=user_info["main_user_email"],
+                    main_user_phone_number=user_info["main_user_phone_number"],
+                    trajectory_history=trajectory_history,
+                )
+
+                # Handle the case where generation fails
+                if generator_output is None:
+                    self._log_error("Generator failed to produce output after maximum retries.")
+                    execution_status = ExecutionStatus.CRASHED
+                    break
+
+                # Execute code in environment
+                code = generator_output.final_answer
+                exec_result = environment.execute_code(sample.task_id, self.extract_code(code))
+
+                # Format observation
+                observation = f"Output: {exec_result.get('output', '')}\n"
+
+                # Add step to trajectory
+                trajectory.add_step(
+                    reasoning=generator_output.reasoning,
+                    bullet_ids=generator_output.bullet_ids,
+                    code=code,
+                    observation=observation,
+                )
+
+                # Check if task is completed via environment API
+                if environment.is_task_completed(sample.task_id):
+                    self._log_info("Task completion detected by environment")
+                    execution_status = ExecutionStatus.COMPLETED
+                    final_generator_output = generator_output
+                    break
+
+                final_generator_output = generator_output
+
+            except Exception as e:
+                self._log_error(f"Execution crashed: {str(e)}")
+                execution_status = ExecutionStatus.CRASHED
+                break
+
+        # Save final task status
+        trajectory.execution_status = execution_status.value
+
+        # Get unit test results
+        unit_test_result = environment.evaluate_task(sample.task_id)
+        unit_test_output = unit_test_result.get("output", "(no unit test output)")
+
+        # Parse unit test results for TGC calculation
+        from appworld_experiment.experiment_logger import parse_unit_test_results
+        unit_tests_passed, unit_tests_total = parse_unit_test_results(unit_test_output)
+        tgc = unit_tests_passed / unit_tests_total if unit_tests_total > 0 else 0.0
+        # SGC = 1 if TGC is 100%, else 0
+        sgc = 1.0 if tgc == 1.0 else 0.0
+
+        # Close task
+        environment.close_task(sample.task_id)
+
+        # Store trajectory in sample.context for logging
+        sample.context = trajectory.format_for_reflector()
+
+        # Create environment result (no Reflector/Curator in evaluation mode)
+        env_result = EnvironmentResult(
+            feedback=f"Task completed in {len(trajectory.steps)} steps. Status: {execution_status.value}",
+            ground_truth=sample.ground_truth,
+            metrics={
+                "execution_status": execution_status.value,
+                "num_steps": len(trajectory.steps),
+                "tgc": tgc,
+                "sgc": sgc,
+                "unit_tests_passed": unit_tests_passed,
+                "unit_tests_total": unit_tests_total
+            }
+        )
+
+        # Calculate execution time and log metrics
+        execution_time = time.time() - start_time
+
+        if self.logger:
+            from appworld_experiment.experiment_logger import TaskMetrics
+
+            # Save trajectory
+            self.logger.log_trajectory(task_id, sample.context)
+
+            # Log task metrics
+            metrics = TaskMetrics(
+                task_id=task_id,
+                sample_index=step_index,
+                epoch=0,  # Indicate evaluation phase
+                execution_status=execution_status.value,
+                num_steps=len(trajectory.steps),
+                sgc=sgc,
+                execution_time=execution_time,
+                trajectory_length=len(sample.context),
+                num_bullet_tags=0,  # No reflection in evaluation
+                playbook_size=len(self.playbook.as_prompt().split('\n')),
+                tgc=tgc,
+                unit_tests_passed=unit_tests_passed,
+                unit_tests_total=unit_tests_total
+            )
+            self.logger.log_task_metrics(metrics)
+
+        # Return result without reflection/curator outputs
+        # Create dummy reflection and curator outputs for compatibility
+        from src.opence.methods.ace.roles import ReflectorOutput, CuratorOutput
+        from src.opence.methods.ace.playbook import DeltaBatch
+
+        dummy_reflection = ReflectorOutput(
+            reasoning="(Evaluation mode - no reflection)",
+            error_identification="",
+            root_cause_analysis="",
+            correct_approach="",
+            key_insight="",
+            raw={},
+            bullet_tags=[]
+        )
+        dummy_curator_output = CuratorOutput(
+            raw={},
+            delta=DeltaBatch(reasoning="(Evaluation mode - no curation)", operations=[])
+        )
+
+        return AdapterStepResult(
+            sample=sample,
+            generator_output=final_generator_output,
+            environment_result=env_result,
+            reflection=dummy_reflection,
+            curator_output=dummy_curator_output,
+            playbook_snapshot=self.playbook.as_prompt(),
+        )
 
 
 class AppWorldOfflineAdapter(AppWorldAdapterBase):
-    """Runs multi-epoch offline adaptation on AppWorld training split.
+    """Runs multi-epoch offline adaptation on AppWorld training split, then evaluates on test split.
 
     Key differences from base OfflineAdapter:
     1. Uses AppWorldGenerator with task-specific parameters
     2. Extracts user info from sample.metadata
-    3. Supports few-shot examples injection
-
+    3. After training completes, runs inference on test data with frozen playbook
+    
     Example:
         ```python
         from appworld_experiment.appworld_adaptation import AppWorldOfflineAdapter
@@ -393,11 +598,13 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
             playbook=Playbook(),
             generator=AppWorldGenerator(llm),
             reflector=AppWorldReflector(llm),
-            curator=AppWorldCurator(llm),
-            few_shot_examples="[Your examples here]",
+            curator=AppWorldCurator(llm)
         )
 
-        results = adapter.run(samples, environment, epochs=3)
+        # Run training then test (playbook frozen after training)
+        train_results, test_results = adapter.run(
+            train_samples, test_samples, environment, epochs=3
+        )
         ```
     """
 
@@ -446,36 +653,52 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
 
     def run(
         self,
-        samples: Sequence[Sample],
+        train_samples: Sequence[Sample],
+        test_samples: Sequence[Sample],
         environment: TaskEnvironment,
         epochs: int = 1,
-    ) -> List[AdapterStepResult]:
-        """Run offline adaptation loop for multiple epochs.
+    ) -> tuple[List[AdapterStepResult], List[AdapterStepResult]]:
+        """Run offline adaptation loop for multiple epochs, then evaluate on test data.
+
+        Offline adaptation has two phases:
+        1. Training Phase: Process train samples with full Generator → Environment →
+           Reflector → Curator loop. Playbook is updated after each sample.
+        2. Evaluation Phase: Process test samples with Generator only. Playbook is
+           frozen and not updated.
 
         Args:
-            samples: Sequence of Samples to process (with metadata containing user info)
+            train_samples: Sequence of train Samples to process (with metadata
+                containing user info and ground truth)
+            test_samples: Sequence of test Samples to process (with metadata
+                containing user info but no ground truth)
             environment: TaskEnvironment for evaluation
             epochs: Number of training epochs
 
         Returns:
-            List of AdapterStepResult for all samples across all epochs
+            Tuple of (train_results, test_results) containing AdapterStepResults
         """
-        results: List[AdapterStepResult] = []
-        total_steps = len(samples)
+        # ==================== Training Phase ====================
+        self._log_info("=" * 60)
+        self._log_info("Starting TRAINING PHASE (Playbook Learning)")
+        self._log_info(f"Training samples: {len(train_samples)}, Epochs: {epochs}")
+        self._log_info("=" * 60)
+
+        train_results: List[AdapterStepResult] = []
+        total_train_steps = len(train_samples)
         bullet_ids_buffer = []  # Buffer for collecting bullet IDs
-        sample_counter = 0  # Track total samples processed
+        train_sample_counter = 0  # Track total train samples processed
 
         for epoch_idx in range(1, epochs + 1):
-            for step_idx, sample in enumerate(samples, start=1):
+            self._log_info(f"[Training] Epoch {epoch_idx}/{epochs}")
+            for step_idx, sample in enumerate(train_samples, start=1):
+                self._log_info(f"[Training] Processing sample {step_idx}/{total_train_steps}")
                 result = self._process_sample(
                     sample,
                     environment,
                     epoch=epoch_idx,
-                    total_epochs=epochs,
                     step_index=step_idx,
-                    total_steps=total_steps,
                 )
-                results.append(result)
+                train_results.append(result)
 
                 # Collect bullet IDs
                 new_bullet_ids = [
@@ -484,12 +707,12 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
                     if op.bullet_id
                 ]
                 bullet_ids_buffer.extend(new_bullet_ids)
-                sample_counter += 1
+                train_sample_counter += 1
 
                 # Sample-based deduplication (if enabled)
                 if self.deduplicator and self.dedup_frequency > 0:
-                    if sample_counter % self.dedup_frequency == 0:
-                        self._log_info(f"[Deduplication] Processing after {sample_counter} samples")
+                    if train_sample_counter % self.dedup_frequency == 0:
+                        self._log_info(f"[Deduplication] Processing after {train_sample_counter} samples")
                         self.playbook.deduplicate(self.deduplicator, bullet_ids_buffer)
                         bullet_ids_buffer = []  # Clear buffer after dedup
 
@@ -498,24 +721,64 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
             self._log_info(f"[Deduplication] Final processing for remaining {len(bullet_ids_buffer)} bullets")
             self.playbook.deduplicate(self.deduplicator, bullet_ids_buffer)
 
-        return results
+        self._log_info("=" * 60)
+        self._log_info("TRAINING PHASE COMPLETE")
+        self._log_info(f"Final playbook size: {len(self.playbook.as_prompt().split(chr(10)))} lines")
+        self._log_info("=" * 60)
+
+        # ==================== Evaluation Phase ====================
+        self._log_info("=" * 60)
+        self._log_info("Starting EVALUATION PHASE (Frozen Playbook)")
+        self._log_info(f"Test samples: {len(test_samples)}")
+        self._log_info("Note: Only Generator runs. No Reflector/Curator updates.")
+        self._log_info("=" * 60)
+
+        test_results: List[AdapterStepResult] = []
+        total_test_steps = len(test_samples)
+
+        for step_idx, sample in enumerate(test_samples, start=1):
+            self._log_info(f"[Evaluation] Processing sample {step_idx}/{total_test_steps}")
+            result = self._evaluation_sample(
+                sample,
+                environment,
+                step_index=step_idx,
+            )
+            test_results.append(result)
+
+        self._log_info("=" * 60)
+        self._log_info("EVALUATION PHASE COMPLETE")
+        self._log_info(f"Processed {len(test_results)} test samples")
+        self._log_info("=" * 60)
+
+        return train_results, test_results
 
 
 class AppWorldOnlineAdapter(AppWorldAdapterBase):
-    """Processes a stream of AppWorld samples sequentially.
+    """Processes AppWorld samples with continuous playbook learning.
 
-    Key differences from base OnlineAdapter:
+    Online adaptation processes each sample through the full learning loop:
+    Generator → Environment → Reflector → Curator
+
+    The playbook is updated AFTER EACH SAMPLE, enabling continuous learning
+    where knowledge gained from one task immediately benefits subsequent tasks.
+
+    Key characteristics:
     1. Uses AppWorldGenerator with task-specific parameters
     2. Extracts user info from sample.metadata
-    3. Updates playbook after each sample (no epoch batching)
+    3. Updates playbook after EVERY sample (continuous learning)
     4. Supports sample-based deduplication
+    5. No separate training/evaluation phases - always learning
+
+    Comparison with OfflineAdapter:
+    - Offline: Train on dataset → Freeze playbook → Evaluate
+    - Online: Learn continuously on each sample (no freeze)
 
     Example:
         ```python
         from appworld_experiment.appworld_adaptation import AppWorldOnlineAdapter
 
         adapter = AppWorldOnlineAdapter(
-            playbook=Playbook(),
+            playbook=Playbook(),  # Can be empty or pre-populated
             generator=AppWorldGenerator(llm),
             reflector=AppWorldReflector(llm),
             curator=AppWorldCurator(llm),
@@ -523,8 +786,9 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
             dedup_frequency=5,  # Deduplicate every 5 samples
         )
 
-        # Process streaming samples
+        # Process samples with continuous learning
         results = adapter.run(sample_stream, environment)
+        # Playbook is updated after each sample
         ```
     """
 
@@ -576,10 +840,16 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
         samples: Iterable[Sample],
         environment: TaskEnvironment,
     ) -> List[AdapterStepResult]:
-        """Run online adaptation on streaming samples.
+        """Run online adaptation with continuous playbook learning.
 
-        Unlike offline adaptation which processes samples in epochs,
-        online adaptation updates the playbook after each sample.
+        Each sample goes through the full learning loop:
+        1. Generator produces code based on current playbook
+        2. Environment executes code and provides feedback
+        3. Reflector analyzes execution and tags playbook bullets
+        4. Curator updates playbook based on reflection
+
+        The playbook evolves continuously - knowledge from each task
+        immediately benefits subsequent tasks.
 
         Args:
             samples: Iterable of Samples (can be infinite stream, with metadata)
@@ -588,18 +858,22 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
         Returns:
             List of AdapterStepResult for all processed samples
         """
+        self._log_info("=" * 60)
+        self._log_info("Starting ONLINE ADAPTATION (Continuous Learning)")
+        self._log_info("Playbook will be updated after each sample")
+        self._log_info("=" * 60)
+
         results: List[AdapterStepResult] = []
         bullet_ids_buffer = []  # Buffer for collecting bullet IDs
         sample_counter = 0  # Track samples processed
 
         for step_idx, sample in enumerate(samples, start=1):
+            self._log_info(f"[Online] Processing sample {step_idx}")
             result = self._process_sample(
                 sample,
                 environment,
                 epoch=1,
-                total_epochs=1,
                 step_index=step_idx,
-                total_steps=step_idx,  # Total is unknown in streaming
             )
             results.append(result)
 
@@ -623,5 +897,11 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
         if self.deduplicator and bullet_ids_buffer:
             self._log_info(f"[Deduplication] Final processing for remaining {len(bullet_ids_buffer)} bullets")
             self.playbook.deduplicate(self.deduplicator, bullet_ids_buffer)
+
+        self._log_info("=" * 60)
+        self._log_info("ONLINE ADAPTATION COMPLETE")
+        self._log_info(f"Processed {len(results)} samples")
+        self._log_info(f"Final playbook size: {len(self.playbook.as_prompt().split(chr(10)))} lines")
+        self._log_info("=" * 60)
 
         return results
