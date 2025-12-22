@@ -85,7 +85,11 @@ IMPORTANT: You must respond only using Text object and the Markdown format defin
 
 APPWORLD_REFLECTOR_PROMPT = """\
 You are an expert AppWorld coding agent and educator. Your job is to diagnose the current trajectory: identify what went wrong (or could be better), grounded in execution feedback, API usage, unit test report, and ground truth when applicable.
-**You must respond only using Text object and the Markdown format specified below. Don't respond json Object**
+
+**CRITICAL FORMAT REQUIREMENT:**
+- Your response MUST begin directly with `### Reasoning` (no JSON wrapper, no `{{"Text":...}}`, no `{{"Reasoning":...}}`).
+- Use Markdown headers (###) to separate sections.
+- Output plain text only - never wrap your response in JSON or any other format.
 
 Instructions:
 - Carefully analyze the model's reasoning trace to identify where it went wrong.
@@ -119,68 +123,6 @@ PLAYBOOK_START
 {playbook}
 PLAYBOOK_END
 
-Examples:
-
-Example 1:
-Ground Truth Code: [Code that uses apis.phone.search_contacts() to find roommates, then filters Venmo transactions]
-Generated Code: [Code that tries to identify roommates by parsing Venmo transaction descriptions using keywords like "rent", "utilities"]
-Execution Error: AssertionError: Expected 1068.0 but got 79.0
-Test Report: FAILED - Wrong total amount calculated due to incorrect roommate identification
-Response:
-### Reasoning
-
-The generated code attempted to identify roommates by parsing Venmo transaction descriptions rather than using the authoritative Phone app contacts. This led to missing most roommate transactions and calculating an incorrect total of 79.0 instead of 1068.0.
-
-### Error Identification
-
-The agent used unreliable heuristics (keyword matching in transaction descriptions) to identify roommates instead of the correct API (Phone contacts).
-
-### Root Cause Analysis
-
-The agent misunderstood the data architecture - it assumed transaction descriptions contained reliable relationship information, when the Phone app is the authoritative source for contact relationships.
-
-### Correct Approach
-
-First authenticate with Phone app, use apis.phone.search_contacts() to identify contacts with 'roommate' relationship, then filter Venmo transactions by those specific contact emails/phone numbers.
-
-### Key Insight
-
-Always resolve identities from the correct source app - Phone app for relationships, never rely on transaction descriptions or other indirect heuristics which are unreliable.
-
-### Bullet Tags
-
-[{{"id": "[kb_heuristics_desc]", "tag": "harmful"}}, {{"id": "[kb_venmo_basic]", "tag": "neutral"}}]
-
-Example 2:
-Ground Truth Code: [Code that uses proper while True pagination loop to get all Spotify playlists]
-Generated Code: [Code that uses for i in range(10) to paginate through playlists]
-Execution Error: None (code ran successfully)
-Test Report: FAILED - Expected 23 playlists but got 10 due to incomplete pagination
-Response:
-### Reasoning
-
-The generated code used a fixed range loop (range(10)) for pagination instead of properly iterating until no more results are returned. This caused the agent to only collect the first 10 pages of playlists, missing 13 additional playlists that existed on later pages.
-
-### Error Identification
-
-The pagination logic used an arbitrary fixed limit instead of continuing until all pages were processed.
-
-### Root Cause Analysis
-
-The agent used a cautious approach with a fixed upper bound to avoid infinite loops, but this prevented complete data collection when the actual data exceeded the arbitrary limit.
-
-### Correct Approach
-
-Use while True loop with proper break condition: continue calling the API with incrementing page_index until the API returns empty results or null, then break.
-
-### Key Insight
-
-For pagination, always use while True loop instead of fixed range iterations to ensure complete data collection across all available pages.
-
-### Bullet Tags
-
-[{{"id": "[kb_pagination_limit]", "tag": "harmful"}}, {{"id": "[kb_api_basics]", "tag": "helpful"}}]
-
 Outputs:
 **STRICT OUTPUT FORMAT:** You must **ALWAYS** respond using the following **Markdown** structure:
 
@@ -208,10 +150,10 @@ Outputs:
 
 <A Python list of dicts, e.g.: [{{"id": "[bullet_id_1]", "tag": "helpful"}}, {{"id": "[bullet_id_2]", "tag": "harmful"}}]. If none, write: []>
 
-IMPORTANT: You must respond only using Text object and the Markdown format defined above. **Omit any text or explanations outside of the required output format.**
-
 [FULL AGENT-ENVIRONMENT TRAJECTORY ATTACHED HERE]
 {full_trajectory}
+
+IMPORTANT: Start your response directly with `### Reasoning` - never output JSON like `{{"Text":...}}` or `{{"Reasoning":...}}`.
 """
 
 
