@@ -40,7 +40,7 @@ class Trajectory:
     """
     steps: List[TrajectoryStep]
     task: str
-    is_completed: bool = False
+    execution_status: str = "max_steps_reached"
 
     def format_for_generator(self) -> str:
         """Format trajectory as text for Generator input.
