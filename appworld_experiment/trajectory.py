@@ -113,6 +113,45 @@ class Trajectory:
             lines.append("")
         return "\n".join(lines)
 
+    def format_final_step(self) -> str:
+        """Format the final step of the trajectory.
+
+        Returns:
+            Multi-line string representation of the final step showing
+            reasoning, bullet IDs, code, and observation.
+
+        Example:
+            ```
+            Final Step:
+            Reasoning: I need to check the Venmo API...
+            Bullet IDs: [kb_check_api_schema]
+            Code:
+            ```python
+            print(apis.api_docs.show_api_doc(app_name='venmo'))
+            ```
+
+            Observation:
+            Returns a list of transactions...
+            ```
+        """
+        if not self.steps:
+            return "No steps in trajectory."
+
+        final_step = self.steps[-1]
+        lines = []
+        lines.append("Final Step:")
+        lines.append(f"Reasoning: {final_step.reasoning}")
+        lines.append(f"Bullet IDs: {final_step.bullet_ids}")
+        lines.append("Code:")
+        lines.append("```python")
+        lines.append(final_step.code)
+        lines.append("```")
+        lines.append("")
+        lines.append("Observation:")
+        lines.append(final_step.observation)
+        lines.append("")
+        return "\n".join(lines)
+
     def add_step(
         self,
         reasoning: str,
