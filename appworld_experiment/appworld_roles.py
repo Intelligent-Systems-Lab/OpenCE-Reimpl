@@ -321,7 +321,7 @@ class AppWorldGenerator(Generator):
 
                 self._log_info(f"\nAppWorldGenerator's LLM response: {response.text}\n")
 
-                if response.text.strip().startswith('{'):
+                if response.text.strip().startswith('{') or response.text.strip().startswith('```json'):
                     data = _safe_json_loads(response.text)
                 else:
                     data = _markdown_parser(response.text, self.schema)
