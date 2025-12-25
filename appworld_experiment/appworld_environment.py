@@ -146,7 +146,13 @@ class AppWorldEnvironment:
             "suppress_errors": suppress_errors,
             "report": report
         }
-        response = self.client.post("/evaluate", json=payload)
-        result = response.json()
-        self._log_info(f"Unit test evaluation: {response.text}")
-        return result
+        for i in range(3):  # Retry up to 3 times
+            try:
+                response = self.client.post("/evaluate", json=payload)
+                result = response.json()
+                self._log_info(f"Unit test evaluation: {response.text}")
+                return result
+            except Exception as e:
+                self._log_info(f"Evaluation attempt {i+1} failed with error: {str(e)}")
+        return {"output": "Evaluation failed after 3 attempts."}
+            
