@@ -57,7 +57,6 @@ class AppWorldAdapterBase(AdapterBase):
         reflector: AppWorldReflector,
         curator: AppWorldCurator,
         max_refinement_rounds: int = 1,
-        reflection_window: int = 3,
         max_interaction_steps: int = 10,
         logger: Optional["ExperimentLogger"] = None,
     ) -> None:
@@ -69,7 +68,6 @@ class AppWorldAdapterBase(AdapterBase):
             reflector: AppWorldReflector instance
             curator: AppWorldCurator instance
             max_refinement_rounds: Number of reflector refinement rounds
-            reflection_window: Number of recent reflections to maintain
             max_interaction_steps: Maximum number of agent-environment interaction steps
             logger: Optional ExperimentLogger for tracking metrics
         """
@@ -79,8 +77,7 @@ class AppWorldAdapterBase(AdapterBase):
             generator=generator,
             reflector=reflector,
             curator=curator,
-            max_refinement_rounds=max_refinement_rounds,
-            reflection_window=reflection_window,
+            max_refinement_rounds=max_refinement_rounds
         )
         self.max_interaction_steps = max_interaction_steps
         self.logger = logger
@@ -173,6 +170,7 @@ class AppWorldAdapterBase(AdapterBase):
         *,
         epoch: int,
         step_index: int,
+        phase: str = "default",
     ) -> AdapterStepResult:
         """Process a single AppWorld sample through multi-step interaction.
 
@@ -351,7 +349,7 @@ class AppWorldAdapterBase(AdapterBase):
             task_id = getattr(sample, 'task_id', f'sample_{step_index}')
             self.logger.log_trajectory(task_id, sample.context)
 
-            # Log task metrics
+            # Log task metrics with the specified phase
             metrics = TaskMetrics(
                 task_id=task_id,
                 sample_index=step_index,
@@ -367,7 +365,7 @@ class AppWorldAdapterBase(AdapterBase):
                 unit_tests_passed=unit_tests_passed,
                 unit_tests_total=unit_tests_total
             )
-            self.logger.log_task_metrics(metrics)
+            self.logger.log_task_metrics(metrics, phase=phase)
 
         return AdapterStepResult(
             sample=sample,
@@ -384,6 +382,7 @@ class AppWorldAdapterBase(AdapterBase):
         environment: TaskEnvironment,
         *,
         step_index: int,
+        phase: str = "test",
     ) -> AdapterStepResult:
         """Process a single AppWorld sample for evaluation with frozen playbook.
 
@@ -529,7 +528,7 @@ class AppWorldAdapterBase(AdapterBase):
             # Save trajectory
             self.logger.log_trajectory(task_id, sample.context)
 
-            # Log task metrics
+            # Log task metrics with the specified phase
             metrics = TaskMetrics(
                 task_id=task_id,
                 sample_index=step_index,
@@ -545,7 +544,7 @@ class AppWorldAdapterBase(AdapterBase):
                 unit_tests_passed=unit_tests_passed,
                 unit_tests_total=unit_tests_total
             )
-            self.logger.log_task_metrics(metrics)
+            self.logger.log_task_metrics(metrics, phase=phase)
 
         # Return result without reflection/curator outputs
         # Create dummy reflection and curator outputs for compatibility
@@ -618,7 +617,6 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
         deduplicator: Optional[OllamaDeduplicator] = None,
         dedup_frequency: int = 0,
         max_refinement_rounds: int = 1,
-        reflection_window: int = 3,
         max_interaction_steps: int = 10,
         logger=None,
     ) -> None:
@@ -634,7 +632,6 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
                              0 = once per epoch (default),
                              N > 0 = every N samples
             max_refinement_rounds: Reflector refinement iterations
-            reflection_window: Number of recent reflections to keep
             max_interaction_steps: Maximum number of agent-environment interaction steps
             logger: Optional ExperimentLogger for tracking
         """
@@ -644,7 +641,6 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
             reflector=reflector,
             curator=curator,
             max_refinement_rounds=max_refinement_rounds,
-            reflection_window=reflection_window,
             max_interaction_steps=max_interaction_steps,
             logger=logger,
         )
@@ -697,6 +693,7 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
                     environment,
                     epoch=epoch_idx,
                     step_index=step_idx,
+                    phase="train",
                 )
                 train_results.append(result)
 
@@ -802,7 +799,6 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
         deduplicator: Optional[OllamaDeduplicator] = None,
         dedup_frequency: int = 0,
         max_refinement_rounds: int = 1,
-        reflection_window: int = 3,
         max_interaction_steps: int = 10,
         logger=None,
     ) -> None:
@@ -818,7 +814,6 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
                              0 = no deduplication (default),
                              N > 0 = every N samples
             max_refinement_rounds: Reflector refinement iterations
-            reflection_window: Number of recent reflections to keep
             max_interaction_steps: Maximum number of agent-environment interaction steps
             logger: Optional ExperimentLogger for tracking
         """
@@ -828,7 +823,6 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
             reflector=reflector,
             curator=curator,
             max_refinement_rounds=max_refinement_rounds,
-            reflection_window=reflection_window,
             max_interaction_steps=max_interaction_steps,
             logger=logger,
         )
@@ -902,6 +896,98 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
         self._log_info("ONLINE ADAPTATION COMPLETE")
         self._log_info(f"Processed {len(results)} samples")
         self._log_info(f"Final playbook size: {self.playbook.__len__()} bullets")
+        self._log_info("=" * 60)
+
+        return results
+        
+class AppworldBaselineAdapter(AppWorldAdapterBase):
+    """Adapter that runs only the Generator on AppWorld samples without learning.
+
+    This baseline adapter processes each sample by generating code using
+    the current playbook and executing it in the environment. No reflection
+    or curation is performed, so the playbook remains unchanged.
+
+    Key characteristics:
+    1. Uses AppWorldGenerator with task-specific parameters
+    2. Extracts user info from sample.metadata
+    3. No Reflector or Curator - playbook is static
+    4. Suitable for baseline comparisons without adaptation
+
+    Example:
+        ```python
+        from appworld_experiment.appworld_adaptation import AppworldBaselineAdapter
+
+        adapter = AppworldBaselineAdapter(
+            playbook=Playbook(),  # Can be empty or pre-populated
+            generator=AppWorldGenerator(llm),
+        )
+
+        # Process samples without learning
+        results = adapter.run(sample_stream, environment)
+        # Playbook remains unchanged
+        ```
+    """
+
+    def __init__(
+        self,
+        *,
+        playbook: Optional[Playbook] = Playbook(),
+        generator: AppWorldGenerator,
+        max_interaction_steps: int = 10,
+        logger=None,
+    ) -> None:
+        """Initialize AppWorld baseline adapter.
+
+        Args:
+            playbook: Initial playbook
+            generator: AppWorldGenerator instance
+            max_interaction_steps: Maximum number of agent-environment interaction steps
+            logger: Optional ExperimentLogger for tracking
+        """
+        self.generator = generator
+        self.max_interaction_steps = max_interaction_steps
+        self.logger = logger
+        self.playbook = playbook
+
+    def run(
+        self,
+        samples: Iterable[Sample],
+        environment: TaskEnvironment,
+    ) -> List[AdapterStepResult]:
+        """Run baseline adaptation without learning.
+
+        Each sample is processed through:
+        1. Generator produces code based on current playbook
+        2. Environment executes code and provides feedback
+
+        No reflection or curation is performed, so the playbook remains static.
+
+        Args:
+            samples: Iterable of Samples (can be infinite stream, with metadata)
+            environment: TaskEnvironment for evaluation
+        Returns:
+            List of AdapterStepResult for all processed samples
+        """
+        self._log_info("=" * 60)
+        self._log_info("Starting BASELINE ADAPTATION (No Learning)")
+        self._log_info("Playbook will remain unchanged")
+        self._log_info("=" * 60)
+
+        results: List[AdapterStepResult] = []
+
+        for step_idx, sample in enumerate(samples, start=1):
+            self._log_info(f"[Baseline] Processing sample {step_idx}")
+            result = self._evaluation_sample(
+                sample,
+                environment,
+                step_index=step_idx,
+                phase="baseline"
+            )
+            results.append(result)
+
+        self._log_info("=" * 60)
+        self._log_info("BASELINE ADAPTATION COMPLETE")
+        self._log_info(f"Processed {len(results)} samples")
         self._log_info("=" * 60)
 
         return results
