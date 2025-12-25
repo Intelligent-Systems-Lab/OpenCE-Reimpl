@@ -234,7 +234,6 @@ def main() -> None:
         model=model_name,
         max_interaction_steps=args.max_interaction_steps,
         max_refinement_rounds=1,
-        reflection_window=3,
         epochs=args.offline_epochs,
         num_samples=len(train_samples) + len(test_samples),
         timestamp=datetime.now().isoformat()
@@ -291,7 +290,6 @@ def main() -> None:
         model=model_name,
         max_interaction_steps=args.max_interaction_steps,
         max_refinement_rounds=1,
-        reflection_window=3,
         epochs=1,
         num_samples=len(test_samples),
         timestamp=datetime.now().isoformat()

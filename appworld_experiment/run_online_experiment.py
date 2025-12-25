@@ -138,7 +138,6 @@ def main() -> None:
         model=model_name,
         max_interaction_steps=max_interaction_steps,
         max_refinement_rounds=max_refinement_rounds,
-        reflection_window=3,
         epochs=1,  # Online adaptation is single-pass
         num_samples=len(samples),
         timestamp=datetime.now().isoformat()

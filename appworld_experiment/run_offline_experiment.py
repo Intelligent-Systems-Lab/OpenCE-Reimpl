@@ -145,7 +145,6 @@ def main() -> None:
         model=model_name,
         max_interaction_steps=max_interaction_steps,
         max_refinement_rounds=max_refinement_rounds,
-        reflection_window=3,
         epochs=epochs,
         num_samples=len(train_samples) + len(test_samples),
         timestamp=datetime.now().isoformat()
