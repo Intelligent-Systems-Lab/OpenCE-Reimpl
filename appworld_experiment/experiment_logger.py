@@ -54,7 +54,6 @@ class ExperimentConfig:
     model: str
     max_interaction_steps: int
     max_refinement_rounds: int
-    reflection_window: int
     epochs: int
     num_samples: int
     timestamp: str
@@ -77,24 +76,6 @@ class TaskMetrics:
     tgc: float  # Task Goal Completion: unit test pass rate (0.0-1.0)
     unit_tests_passed: int  # Number of unit tests passed
     unit_tests_total: int  # Total number of unit tests
-
-
-@dataclass
-class EpochSummary:
-    """Summary statistics for an epoch."""
-    epoch: int
-    total_samples: int
-    # Execution status breakdown (ratios)
-    completed_rate: float  # Proportion of tasks with execution_status == "completed"
-    max_steps_reached_rate: float  # Proportion of tasks with execution_status == "max_steps_reached"
-    crashed_rate: float  # Proportion of tasks with execution_status == "crashed"
-    avg_steps: float
-    avg_execution_time: float
-    playbook_size: int
-    playbook_changes: int
-    # AppWorld-specific metrics
-    avg_tgc: float  # Average Task Goal Completion across all tasks
-    avg_sgc: float  # Average SGC (proportion of tasks with TGC == 100%)
 
 
 def parse_unit_test_results(unit_test_output: str) -> tuple[int, int]:
@@ -207,8 +188,7 @@ class ExperimentLogger:
 
         # Experiment state
         self.config: Optional[ExperimentConfig] = None
-        self.task_metrics: List[TaskMetrics] = []
-        self.epoch_summaries: List[EpochSummary] = []
+        self.phase_metrics: dict[str, List[TaskMetrics]] = {}  # Phase-separated metrics (e.g., "train", "test", "default")
 
         self.logger.info(f"Experiment logger initialized: {self.experiment_name}")
         self.logger.info(f"Log directory: {self.log_dir}")
@@ -245,13 +225,16 @@ class ExperimentLogger:
         self.logger.info(f"Sample: {sample_index}, Epoch: {epoch}")
         self.logger.info(f"{'='*60}")
 
-    def log_task_metrics(self, metrics: TaskMetrics):
+    def log_task_metrics(self, metrics: TaskMetrics, phase: str = "default"):
         """Log metrics for a completed task.
 
         Args:
             metrics: Task metrics to log
+            phase: Phase identifier (e.g., "train", "test", "online", "default")
         """
-        self.task_metrics.append(metrics)
+        if phase not in self.phase_metrics:
+            self.phase_metrics[phase] = []
+        self.phase_metrics[phase].append(metrics)
 
         # Log to console
         self.logger.info(f"Task {metrics.task_id} - {metrics.execution_status}")
@@ -356,74 +339,134 @@ class ExperimentLogger:
             f.write(trajectory)
         self.logger.debug(f"Saved trajectory for {task_id}")
 
-    def log_epoch_summary(self, summary: EpochSummary):
-        """Log summary for an epoch.
+    def _compute_phase_stats(self, metrics: List[TaskMetrics]) -> dict:
+        """Compute comprehensive statistics for a list of task metrics.
 
         Args:
-            summary: Epoch summary statistics
-        """
-        self.epoch_summaries.append(summary)
+            metrics: List of TaskMetrics to compute statistics for
 
-        self.logger.info("\n" + "=" * 80)
-        self.logger.info(f"EPOCH {summary.epoch} SUMMARY")
-        self.logger.info("=" * 80)
-        self.logger.info(f"  Total samples: {summary.total_samples}")
-        self.logger.info(f"  Execution status breakdown:")
-        self.logger.info(f"    - Completed: {summary.completed_rate:.1%}")
-        self.logger.info(f"    - Max steps reached: {summary.max_steps_reached_rate:.1%}")
-        self.logger.info(f"    - Crashed: {summary.crashed_rate:.1%}")
-        self.logger.info(f"  Average TGC: {summary.avg_tgc:.2%}")
-        self.logger.info(f"  Average SGC: {summary.avg_sgc:.2%}")
-        self.logger.info(f"  Avg steps: {summary.avg_steps:.1f}")
-        self.logger.info(f"  Avg time: {summary.avg_execution_time:.2f}s")
-        self.logger.info(f"  Playbook size: {summary.playbook_size} bullets")
-        self.logger.info(f"  Playbook changes: {summary.playbook_changes}")
-        self.logger.info("=" * 80)
+        Returns:
+            Dictionary containing computed statistics (used for both logging and reports)
+        """
+        import statistics as stats_lib
+
+        if not metrics:
+            return {
+                "total_tasks": 0,
+                "execution_status_breakdown": {
+                    "completed_rate": 0.0,
+                    "max_steps_reached_rate": 0.0,
+                    "crashed_rate": 0.0,
+                },
+                "tgc": {"avg": 0.0, "min": 0.0, "max": 0.0, "std": 0.0, "median": 0.0},
+                "sgc": {"avg": 0.0, "count": 0},
+                "avg_steps": 0.0,
+                "avg_time": 0.0,
+                "total_time": 0.0,
+                "tgc_distribution": {},
+                "per_task_results": [],
+                "unit_tests": {"passed": 0, "total": 0},
+            }
+
+        total_tasks = len(metrics)
+
+        # Execution status breakdown
+        completed_count = sum(1 for m in metrics if m.execution_status == "completed")
+        max_steps_count = sum(1 for m in metrics if m.execution_status == "max_steps_reached")
+        crashed_count = sum(1 for m in metrics if m.execution_status == "crashed")
+
+        # TGC statistics
+        tgc_values = [m.tgc for m in metrics]
+        avg_tgc = sum(tgc_values) / total_tasks
+        min_tgc = min(tgc_values)
+        max_tgc = max(tgc_values)
+        std_tgc = stats_lib.stdev(tgc_values) if total_tasks > 1 else 0.0
+        median_tgc = stats_lib.median(tgc_values)
+
+        # SGC statistics
+        avg_sgc = sum(m.sgc for m in metrics) / total_tasks
+        sgc_count = sum(1 for m in metrics if m.sgc == 1.0)
+
+        # TGC distribution
+        tgc_bins = {
+            "0-20%": sum(1 for t in tgc_values if 0 <= t < 0.2),
+            "20-40%": sum(1 for t in tgc_values if 0.2 <= t < 0.4),
+            "40-60%": sum(1 for t in tgc_values if 0.4 <= t < 0.6),
+            "60-80%": sum(1 for t in tgc_values if 0.6 <= t < 0.8),
+            "80-100%": sum(1 for t in tgc_values if 0.8 <= t < 1.0),
+            "100%": sum(1 for t in tgc_values if t == 1.0),
+        }
+
+        # Per-task breakdown
+        per_task_results = [
+            {
+                "task_id": m.task_id,
+                "execution_status": m.execution_status,
+                "tgc": round(m.tgc, 4),
+                "sgc": m.sgc,
+                "unit_tests_passed": m.unit_tests_passed,
+                "unit_tests_total": m.unit_tests_total,
+                "num_steps": m.num_steps,
+                "execution_time": round(m.execution_time, 2)
+            }
+            for m in metrics
+        ]
+
+        return {
+            "total_tasks": total_tasks,
+            "execution_status_breakdown": {
+                "completed_rate": completed_count / total_tasks,
+                "max_steps_reached_rate": max_steps_count / total_tasks,
+                "crashed_rate": crashed_count / total_tasks,
+            },
+            "tgc": {"avg": avg_tgc, "min": min_tgc, "max": max_tgc, "std": std_tgc, "median": median_tgc},
+            "sgc": {"avg": avg_sgc, "count": sgc_count},
+            "avg_steps": sum(m.num_steps for m in metrics) / total_tasks,
+            "avg_time": sum(m.execution_time for m in metrics) / total_tasks,
+            "total_time": sum(m.execution_time for m in metrics),
+            "tgc_distribution": tgc_bins,
+            "per_task_results": per_task_results,
+            "unit_tests": {
+                "passed": sum(m.unit_tests_passed for m in metrics),
+                "total": sum(m.unit_tests_total for m in metrics),
+            },
+        }
+
+    def _log_phase_stats(self, phase_name: str, stats: dict):
+        """Log statistics for a single phase to console.
+
+        Args:
+            phase_name: Name of the phase (e.g., "train", "test")
+            stats: Statistics dictionary from _compute_phase_stats
+        """
+        self.logger.info(f"\n  [{phase_name.upper()}] ({stats['total_tasks']} tasks)")
+        self.logger.info(f"    Execution status:")
+        self.logger.info(f"      - Completed: {stats['execution_status_breakdown']['completed_rate']:.1%}")
+        self.logger.info(f"      - Max steps reached: {stats['execution_status_breakdown']['max_steps_reached_rate']:.1%}")
+        self.logger.info(f"      - Crashed: {stats['execution_status_breakdown']['crashed_rate']:.1%}")
+        self.logger.info(f"    TGC: avg={stats['tgc']['avg']:.2%}, median={stats['tgc']['median']:.2%}, std={stats['tgc']['std']:.2%}")
+        self.logger.info(f"    SGC: {stats['sgc']['avg']:.2%} ({stats['sgc']['count']}/{stats['total_tasks']} tasks)")
+        self.logger.info(f"    Average steps: {stats['avg_steps']:.1f}")
+        self.logger.info(f"    Total time: {stats['total_time']:.2f}s ({stats['total_time']/60:.1f} min)")
 
     def log_experiment_summary(self):
-        """Log final experiment summary."""
-        if not self.task_metrics:
+        """Log final experiment summary with per-phase statistics."""
+        if not self.phase_metrics:
             self.logger.warning("No task metrics to summarize")
             return
 
-        total_tasks = len(self.task_metrics)
+        # Compute per-phase statistics
+        phase_stats = {
+            phase_name: self._compute_phase_stats(metrics_list)
+            for phase_name, metrics_list in self.phase_metrics.items()
+        }
 
-        # Execution status breakdown
-        completed_count = sum(1 for m in self.task_metrics if m.execution_status == "completed")
-        max_steps_count = sum(1 for m in self.task_metrics if m.execution_status == "max_steps_reached")
-        crashed_count = sum(1 for m in self.task_metrics if m.execution_status == "crashed")
-
-        completed_rate = completed_count / total_tasks
-        max_steps_rate = max_steps_count / total_tasks
-        crashed_rate = crashed_count / total_tasks
-
-        avg_steps = sum(m.num_steps for m in self.task_metrics) / total_tasks
-        avg_time = sum(m.execution_time for m in self.task_metrics) / total_tasks
-        total_time = sum(m.execution_time for m in self.task_metrics)
-
-        # Calculate TGC and SGC
-        avg_tgc = sum(m.tgc for m in self.task_metrics) / total_tasks
-        avg_sgc = sum(m.sgc for m in self.task_metrics) / total_tasks
-
+        # Build summary JSON (per-phase only, no overall)
         summary = {
             "experiment_name": self.experiment_name,
             "timestamp": self.timestamp,
             "config": asdict(self.config) if self.config else None,
-            "overall_stats": {
-                "total_tasks": total_tasks,
-                "execution_status_breakdown": {
-                    "completed_rate": completed_rate,
-                    "max_steps_reached_rate": max_steps_rate,
-                    "crashed_rate": crashed_rate,
-                },
-                "avg_tgc": avg_tgc,
-                "avg_sgc": avg_sgc,
-                "avg_steps_per_task": avg_steps,
-                "avg_time_per_task": avg_time,
-                "total_execution_time": total_time,
-            },
-            "epoch_summaries": [asdict(s) for s in self.epoch_summaries],
-            "per_task_metrics": [asdict(m) for m in self.task_metrics],
+            "phases": phase_stats,
         }
 
         # Write summary to JSON
@@ -437,77 +480,31 @@ class ExperimentLogger:
         self.logger.info("\n" + "=" * 80)
         self.logger.info("EXPERIMENT COMPLETE")
         self.logger.info("=" * 80)
-        self.logger.info(f"  Total tasks: {total_tasks}")
-        self.logger.info(f"  Execution status breakdown:")
-        self.logger.info(f"    - Completed: {completed_rate:.1%}")
-        self.logger.info(f"    - Max steps reached: {max_steps_rate:.1%}")
-        self.logger.info(f"    - Crashed: {crashed_rate:.1%}")
-        self.logger.info(f"  Average TGC: {avg_tgc:.2%}")
-        self.logger.info(f"  Average SGC: {avg_sgc:.2%}")
-        self.logger.info(f"  Average steps: {avg_steps:.1f}")
-        self.logger.info(f"  Average time: {avg_time:.2f}s")
-        self.logger.info(f"  Total time: {total_time:.2f}s ({total_time/60:.1f} min)")
+
+        # Log per-phase statistics
+        for phase_name, stats in phase_stats.items():
+            self._log_phase_stats(phase_name, stats)
+
         self.logger.info("=" * 80)
         self.logger.info(f"Results saved to: {self.log_dir}")
 
     def _generate_statistics_report(self):
         """Generate a comprehensive statistics report for experimental analysis.
 
-        This report includes:
+        This report includes per-phase:
         - Model information
-        - Overall TGC and SGC metrics
+        - TGC and SGC metrics with distribution
         - Execution status breakdown
         - Per-task breakdown
-        - Statistical analysis (min, max, std, quartiles)
+        - Statistical analysis (min, max, std, median)
         """
-        if not self.task_metrics:
+        if not self.phase_metrics:
             return
 
-        import statistics
-
-        # Basic statistics
-        total_tasks = len(self.task_metrics)
-
-        # Execution status breakdown
-        completed_count = sum(1 for m in self.task_metrics if m.execution_status == "completed")
-        max_steps_count = sum(1 for m in self.task_metrics if m.execution_status == "max_steps_reached")
-        crashed_count = sum(1 for m in self.task_metrics if m.execution_status == "crashed")
-
-        # TGC statistics
-        tgc_values = [m.tgc for m in self.task_metrics]
-        avg_tgc = sum(tgc_values) / total_tasks
-        min_tgc = min(tgc_values)
-        max_tgc = max(tgc_values)
-        std_tgc = statistics.stdev(tgc_values) if total_tasks > 1 else 0.0
-        median_tgc = statistics.median(tgc_values)
-
-        # SGC calculation (average of all sgc values)
-        avg_sgc = sum(m.sgc for m in self.task_metrics) / total_tasks
-        sgc_count = sum(1 for m in self.task_metrics if m.sgc == 1.0)
-
-        # Per-task breakdown
-        task_breakdown = []
-        for m in self.task_metrics:
-            task_breakdown.append({
-                "task_id": m.task_id,
-                "execution_status": m.execution_status,
-                "tgc": round(m.tgc, 4),
-                "tgc_percentage": f"{m.tgc*100:.2f}%",
-                "sgc": m.sgc,
-                "unit_tests_passed": m.unit_tests_passed,
-                "unit_tests_total": m.unit_tests_total,
-                "num_steps": m.num_steps,
-                "execution_time": round(m.execution_time, 2)
-            })
-
-        # TGC distribution
-        tgc_bins = {
-            "0-20%": sum(1 for t in tgc_values if 0 <= t < 0.2),
-            "20-40%": sum(1 for t in tgc_values if 0.2 <= t < 0.4),
-            "40-60%": sum(1 for t in tgc_values if 0.4 <= t < 0.6),
-            "60-80%": sum(1 for t in tgc_values if 0.6 <= t < 0.8),
-            "80-100%": sum(1 for t in tgc_values if 0.8 <= t < 1.0),
-            "100%": sum(1 for t in tgc_values if t == 1.0),
+        # Compute per-phase statistics (reuses _compute_phase_stats)
+        phase_stats = {
+            phase_name: self._compute_phase_stats(metrics_list)
+            for phase_name, metrics_list in self.phase_metrics.items()
         }
 
         # Build statistics report
@@ -516,46 +513,9 @@ class ExperimentLogger:
                 "experiment_name": self.experiment_name,
                 "timestamp": self.timestamp,
                 "model": self.config.model if self.config else "unknown",
-                "total_tasks": total_tasks,
-                "total_execution_time": f"{sum(m.execution_time for m in self.task_metrics):.2f}s"
+                "phases": list(self.phase_metrics.keys()),
             },
-
-            "overall_metrics": {
-                "execution_status_breakdown": {
-                    "completed_rate": f"{completed_count/total_tasks*100:.2f}%",
-                    "max_steps_reached_rate": f"{max_steps_count/total_tasks*100:.2f}%",
-                    "crashed_rate": f"{crashed_count/total_tasks*100:.2f}%",
-                },
-
-                "tgc_overall": {
-                    "average": f"{avg_tgc*100:.2f}%",
-                    "median": f"{median_tgc*100:.2f}%",
-                    "min": f"{min_tgc*100:.2f}%",
-                    "max": f"{max_tgc*100:.2f}%",
-                    "std": f"{std_tgc*100:.2f}%",
-                    "raw_average": round(avg_tgc, 4)
-                },
-
-                "sgc_overall": {
-                    "average": f"{avg_sgc*100:.2f}%",
-                    "count": f"{sgc_count}/{total_tasks}",
-                    "raw_average": round(avg_sgc, 4)
-                }
-            },
-
-            "tgc_distribution": {
-                bin_name: f"{count} tasks ({count/total_tasks*100:.1f}%)"
-                for bin_name, count in tgc_bins.items()
-            },
-
-            "per_task_results": task_breakdown,
-
-            "summary_statistics": {
-                "avg_steps_per_task": round(sum(m.num_steps for m in self.task_metrics) / total_tasks, 2),
-                "avg_execution_time": f"{sum(m.execution_time for m in self.task_metrics) / total_tasks:.2f}s",
-                "total_unit_tests_passed": sum(m.unit_tests_passed for m in self.task_metrics),
-                "total_unit_tests": sum(m.unit_tests_total for m in self.task_metrics),
-            }
+            "per_phase_statistics": phase_stats,
         }
 
         # Write statistics report
