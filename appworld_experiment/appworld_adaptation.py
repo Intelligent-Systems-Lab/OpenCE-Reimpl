@@ -216,7 +216,7 @@ class AppWorldAdapterBase(AdapterBase):
         trajectory = Trajectory(task=sample.question, steps=[])
 
         # Initialize task in environment
-        environment.initialize_task(sample)
+        environment.initialize_task(sample, self.logger.experiment_name)
 
         # Multi-step interaction loop
         execution_status = ExecutionStatus.MAX_STEPS_REACHED  # Default status
@@ -422,7 +422,7 @@ class AppWorldAdapterBase(AdapterBase):
         trajectory = Trajectory(task=sample.question, steps=[])
 
         # Initialize task in environment
-        environment.initialize_task(sample)
+        environment.initialize_task(sample, self.logger.experiment_name)
 
         # Multi-step interaction loop (Generator only, no Reflector/Curator)
         execution_status = ExecutionStatus.MAX_STEPS_REACHED  # Default status

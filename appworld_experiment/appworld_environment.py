@@ -47,7 +47,7 @@ class AppWorldEnvironment:
 
     # ==================== Session Management ====================
 
-    def initialize_task(self, sample: "AppWorldSample") -> dict:
+    def initialize_task(self, sample: "AppWorldSample", experiment_name: str = "default_experiment") -> dict:
         """Initialize a task session in AppWorld.
 
         Args:
@@ -58,7 +58,7 @@ class AppWorldEnvironment:
         """
         response = self.client.post("/initialize", json={
             "task_id": sample.task_id,
-            "experiment_name": "ace_experiment_1"
+            "experiment_name": experiment_name
         })
         result = response.json()
         self._log_info(f"Initialized task {sample.task_id}")
