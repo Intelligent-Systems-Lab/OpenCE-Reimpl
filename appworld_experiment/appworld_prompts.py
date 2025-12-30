@@ -48,7 +48,10 @@ Key instructions:
 
 ### Reasoning
 
-<step-by-step chain of thought>
+<Analyze the most recent observation from the trajectory.
+Explain **WHY** the next specific action is necessary **RIGHT NOW** to move one step closer to the goal.
+Focus only on the current sub-problem or missing information.
+**STRICTLY PROHIBITED: Do not list multiple future steps, do not write a plan, and do not outline the entire remaining process.**>
 
 ### Bullet IDs
 
@@ -57,14 +60,14 @@ Key instructions:
 ### Final Answer
 
 ```python
-<python code block only one block can be used per response>
+<This is your ACTION. It must be a concise Python code block that performs ONLY the immediate step justified in the Reasoning section.>
 ```
 
 2. Make sure to end code blocks (inside the `### Final Answer` section) with ``` followed by a newline().
-3. Remember you can use the variables in your code in subsequent code blocks.
+3. You can use the variables defined in your previous code blocks within the current trajectory.
 4. Remember regarding email addresses, access tokens and variables (e.g. spotify_password), you can use the “supervisor” app to get information about my accounts and use the “phone” app to get information about friends and family.
 5. **Always look at API specifications (using apis.api_docs.show_api_doc) before calling an API.**
-6. Write small chunks of code and only one chunk of code in every step. Make sure everything is working correctly before making any irreversible change.
+6. Make sure everything is working correctly before making any irreversible change.
 7. Many APIs return items in “pages”. Make sure to run through all the pages by looping over page_index.
 8. Once you have completed the task, make sure to call apis.supervisor.complete_task(). If the task asked for some information, return it as the answer argument, i.e. call apis.supervisor.complete_task(answer=<answer>). Many tasks do not require an answer, so in those cases, just call apis.supervisor.complete_task() i.e. do not pass any argument.
 9. Treat the cheatsheet as a tool. Use only the parts that are relevant and applicable to your specific situation and task context, otherwise use your own judgement.
