@@ -67,7 +67,6 @@ class TaskMetrics:
     epoch: int
     execution_status: str  # "completed", "max_steps_reached", "crashed"
     num_steps: int
-    sgc: float  # Scenario Goal Completion: 1.0 if TGC == 100%, else 0.0
     execution_time: float
     trajectory_length: int
     num_bullet_tags: int
@@ -139,6 +138,7 @@ class ExperimentLogger:
         """
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.experiment_name = experiment_name or f"exp_{self.timestamp}"
+        self.scenario_summary = {}
 
         # Create log directory
         self.log_dir = Path(log_dir) / self.experiment_name
@@ -241,7 +241,6 @@ class ExperimentLogger:
         self.logger.info(f"  Steps: {metrics.num_steps}")
         self.logger.info(f"  Time: {metrics.execution_time:.2f}s")
         self.logger.info(f"  TGC: {metrics.tgc:.2%} ({metrics.unit_tests_passed}/{metrics.unit_tests_total} tests passed)")
-        self.logger.info(f"  SGC: {metrics.sgc:.0f}")
         self.logger.info(f"  Playbook size: {metrics.playbook_size}")
 
         # Write to JSONL file
@@ -338,6 +337,20 @@ class ExperimentLogger:
         with open(trajectory_file, 'w', encoding='utf-8') as f:
             f.write(trajectory)
         self.logger.debug(f"Saved trajectory for {task_id}")
+    
+    def _compute_sgc(self) -> float:
+        """Compute overall SGC (Solution Goal Completion) from logged metrics.
+
+        Returns:
+            Overall SGC as a float
+        """
+        total_scenario = len(self.scenario_summary)
+        passed_scenario = 0
+        for result in self.scenario_summary.values():
+            if result == 3.0:
+                passed_scenario += 1
+        return passed_scenario / total_scenario if total_scenario > 0 else 0.0
+
 
     def _compute_phase_stats(self, metrics: List[TaskMetrics]) -> dict:
         """Compute comprehensive statistics for a list of task metrics.
@@ -359,7 +372,6 @@ class ExperimentLogger:
                     "crashed_rate": 0.0,
                 },
                 "tgc": {"avg": 0.0, "min": 0.0, "max": 0.0, "std": 0.0, "median": 0.0},
-                "sgc": {"avg": 0.0, "count": 0},
                 "avg_steps": 0.0,
                 "avg_time": 0.0,
                 "total_time": 0.0,
@@ -383,10 +395,6 @@ class ExperimentLogger:
         std_tgc = stats_lib.stdev(tgc_values) if total_tasks > 1 else 0.0
         median_tgc = stats_lib.median(tgc_values)
 
-        # SGC statistics
-        avg_sgc = sum(m.sgc for m in metrics) / total_tasks
-        sgc_count = sum(1 for m in metrics if m.sgc == 1.0)
-
         # TGC distribution
         tgc_bins = {
             "0-20%": sum(1 for t in tgc_values if 0 <= t < 0.2),
@@ -403,7 +411,6 @@ class ExperimentLogger:
                 "task_id": m.task_id,
                 "execution_status": m.execution_status,
                 "tgc": round(m.tgc, 4),
-                "sgc": m.sgc,
                 "unit_tests_passed": m.unit_tests_passed,
                 "unit_tests_total": m.unit_tests_total,
                 "num_steps": m.num_steps,
@@ -420,7 +427,7 @@ class ExperimentLogger:
                 "crashed_rate": crashed_count / total_tasks,
             },
             "tgc": {"avg": avg_tgc, "min": min_tgc, "max": max_tgc, "std": std_tgc, "median": median_tgc},
-            "sgc": {"avg": avg_sgc, "count": sgc_count},
+            "sgc": self._compute_sgc(),
             "avg_steps": sum(m.num_steps for m in metrics) / total_tasks,
             "avg_time": sum(m.execution_time for m in metrics) / total_tasks,
             "total_time": sum(m.execution_time for m in metrics),
@@ -445,7 +452,7 @@ class ExperimentLogger:
         self.logger.info(f"      - Max steps reached: {stats['execution_status_breakdown']['max_steps_reached_rate']:.1%}")
         self.logger.info(f"      - Crashed: {stats['execution_status_breakdown']['crashed_rate']:.1%}")
         self.logger.info(f"    TGC: avg={stats['tgc']['avg']:.2%}, median={stats['tgc']['median']:.2%}, std={stats['tgc']['std']:.2%}")
-        self.logger.info(f"    SGC: {stats['sgc']['avg']:.2%} ({stats['sgc']['count']}/{stats['total_tasks']} tasks)")
+        self.logger.info(f"    SGC: {self._compute_sgc():.2%}")
         self.logger.info(f"    Average steps: {stats['avg_steps']:.1f}")
         self.logger.info(f"    Total time: {stats['total_time']:.2f}s ({stats['total_time']/60:.1f} min)")
 
