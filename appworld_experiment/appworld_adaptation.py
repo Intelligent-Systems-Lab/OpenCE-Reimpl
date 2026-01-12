@@ -13,6 +13,7 @@ import logging
 from enum import Enum
 from typing import Iterable, List, Optional, Sequence, TYPE_CHECKING
 import re
+import json
 
 from src.opence.methods.ace.adaptation import (
     AdapterBase,
@@ -81,6 +82,7 @@ class AppWorldAdapterBase(AdapterBase):
         )
         self.max_interaction_steps = max_interaction_steps
         self.logger = logger
+        self.sgc_cnt = {}
 
     def _log_info(self, message: str) -> None:
         """Log info message using ExperimentLogger or fallback to standard logging."""
@@ -163,6 +165,14 @@ class AppWorldAdapterBase(AdapterBase):
             "main_user_phone_number": metadata.get("phone_number", ""),
         }
 
+    def _question_context(self, sample: Sample, environment_result: EnvironmentResult) -> str:
+        parts = [
+            f"question: {sample.question}",
+            f"metadata: {json.dumps(sample.metadata)}",
+            f"ground_truth: {environment_result.ground_truth}",
+        ]
+        return "\n".join(parts)
+    
     def _process_sample(
         self,
         sample: Sample,
@@ -289,9 +299,11 @@ class AppWorldAdapterBase(AdapterBase):
         # Parse unit test results for TGC calculation
         from appworld_experiment.experiment_logger import parse_unit_test_results
         unit_tests_passed, unit_tests_total = parse_unit_test_results(unit_test_output)
-        tgc = unit_tests_passed / unit_tests_total if unit_tests_total > 0 else 0.0
-        # SGC = 1 if TGC is 100%, else 0
-        sgc = 1.0 if tgc == 1.0 else 0.0
+        tgc = 1.0 if unit_tests_passed == unit_tests_total else 0.0
+        
+        scenario_id = sample.task_id.split("_")[0]
+        self.sgc_cnt[scenario_id] = self.sgc_cnt.get(scenario_id, 0) + (1 if tgc == 1.0 else 0.0)
+        self.logger.scenario_summary = self.sgc_cnt
 
         # Close task
         environment.close_task(sample.task_id)
@@ -307,7 +319,6 @@ class AppWorldAdapterBase(AdapterBase):
                 "execution_status": execution_status.value,
                 "num_steps": len(trajectory.steps),
                 "tgc": tgc,
-                "sgc": sgc,
                 "unit_tests_passed": unit_tests_passed,
                 "unit_tests_total": unit_tests_total
             }
@@ -328,10 +339,8 @@ class AppWorldAdapterBase(AdapterBase):
 
         # Curation - update playbook based on reflection
         curator_output = self.curator.curate(
-            reflection=reflection,
-            playbook=self.playbook,
             question_context=self._question_context(sample, env_result),
-            final_generated_code=trajectory.format_final_step() if trajectory.steps else "(no code)",
+            playbook=self.playbook,
             guidebook=self._reflection_context(),  # Recent reflections
         )
 
@@ -356,7 +365,6 @@ class AppWorldAdapterBase(AdapterBase):
                 epoch=epoch,
                 execution_status=execution_status.value,
                 num_steps=len(trajectory.steps),
-                sgc=sgc,
                 execution_time=execution_time,
                 trajectory_length=len(sample.context),
                 num_bullet_tags=len(reflection.bullet_tags),
@@ -495,9 +503,11 @@ class AppWorldAdapterBase(AdapterBase):
         # Parse unit test results for TGC calculation
         from appworld_experiment.experiment_logger import parse_unit_test_results
         unit_tests_passed, unit_tests_total = parse_unit_test_results(unit_test_output)
-        tgc = unit_tests_passed / unit_tests_total if unit_tests_total > 0 else 0.0
-        # SGC = 1 if TGC is 100%, else 0
-        sgc = 1.0 if tgc == 1.0 else 0.0
+        tgc = 1.0 if unit_tests_passed == unit_tests_total else 0.0
+        
+        scenario_id = sample.task_id.split("_")[0]
+        self.sgc_cnt[scenario_id] = self.sgc_cnt.get(scenario_id, 0) + (1 if tgc == 1.0 else 0.0)
+        self.logger.scenario_summary = self.sgc_cnt
 
         # Close task
         environment.close_task(sample.task_id)
@@ -513,7 +523,6 @@ class AppWorldAdapterBase(AdapterBase):
                 "execution_status": execution_status.value,
                 "num_steps": len(trajectory.steps),
                 "tgc": tgc,
-                "sgc": sgc,
                 "unit_tests_passed": unit_tests_passed,
                 "unit_tests_total": unit_tests_total
             }
@@ -535,7 +544,6 @@ class AppWorldAdapterBase(AdapterBase):
                 epoch=0,  # Indicate evaluation phase
                 execution_status=execution_status.value,
                 num_steps=len(trajectory.steps),
-                sgc=sgc,
                 execution_time=execution_time,
                 trajectory_length=len(sample.context),
                 num_bullet_tags=0,  # No reflection in evaluation
@@ -646,6 +654,7 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
         )
         self.deduplicator = deduplicator
         self.dedup_frequency = dedup_frequency
+        self.sgc_cnt = {}
 
     def run(
         self,
@@ -828,6 +837,7 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
         )
         self.deduplicator = deduplicator
         self.dedup_frequency = dedup_frequency
+        self.sgc_cnt = {}
 
     def run(
         self,
@@ -948,6 +958,7 @@ class AppworldBaselineAdapter(AppWorldAdapterBase):
         self.max_interaction_steps = max_interaction_steps
         self.logger = logger
         self.playbook = playbook
+        self.sgc_cnt = {}
 
     def run(
         self,
