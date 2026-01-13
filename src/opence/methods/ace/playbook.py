@@ -59,7 +59,7 @@ class Playbook:
         bullet_id: Optional[str] = None,
         metadata: Optional[Dict[str, int]] = None,
     ) -> Bullet:
-        bullet_id = bullet_id or self._generate_id(section)
+        bullet_id = bullet_id if bullet_id is not None and bullet_id not in self._bullets else self._generate_id(section)
         metadata = metadata or {}
         bullet = Bullet(id=bullet_id, section=section, content=content)
         bullet.apply_metadata(metadata)
