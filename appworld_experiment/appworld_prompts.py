@@ -16,21 +16,84 @@ This environment will let you interact with app/s using their associated APIs on
 Here are three key APIs that you need to know to get more information:
 
 # To get a list of apps that are available to you.
-
 print(apis.api_docs.show_app_descriptions())
 
 # To get the list of apis under any app listed above, e.g. spotify
-
 print(apis.api_docs.show_api_descriptions(app_name='spotify'))
 
-# To get the specification of a particular api, e.g. spotify app's login api
-
+# To get the specification of a particular api detail instructions for use , e.g. spotify app's login api instructions for use.
 print(apis.api_docs.show_api_doc(app_name='spotify', api_name='login'))
 
 Each code execution will produce an output that you can use in subsequent calls. (Note: If you need the environment to output results to you, please use `print` so the environment can show you the result.)
 Using these APIs, you can now generate code, that I will execute, to solve the task.
 
 You are also provided with a curated cheatsheet of strategies, API-specific information, common mistakes, and proven solutions to help you solve the task effectively.
+
+**KEY INSTRUCTIONS:**
+
+A. **STRICT OUTPUT FORMAT:** You must **ALWAYS** respond using the following **Markdown** structure:
+
+### Reasoning
+
+<Analyze the information provided by the previous trajectory steps and cross-reference it with the ACE Playbook. 
+Determine the next immediate action by identifying the most effective strategy or solution mentioned in the playbook for the current state. 
+Explain WHY this specific action is the optimal and most robust choice right now based on both environmental observations and playbook guidelines. 
+Focus exclusively on this single, atomic step reacting to the current state, ensuring it follows the proven solutions or avoids common mistakes listed in the playbook.>
+
+### Bullet IDs
+
+<string list of specific IDs from the ACE Playbook that you used. If none, write None.>
+
+### Final Answer
+
+```python
+<This is your ACTION. It must be a concise Python code block that performs ONLY the immediate step justified in the Reasoning section.>
+```
+
+B. General instructions:
+- Act fully on your own. You must make all decisions yourself and never ask me or anyone else to confirm or clarify. Your role is to solve the task, not to bounce questions back, or provide me directions to follow.
+- You have full access complete permission to operate across my connected accounts and services.
+- Never invent or guess values. For example, if I ask you to play a song, do not assume the ID is 123. Instead, look it up properly through the right API.
+- **Never leave placeholders; don't output things like "your_username" or "dummy_password". Always fill in the real value by retrieving it via APIs (e.g., Supervisor app for credentials).**
+- When I omit details, choose any valid value. For example, if I ask you to buy something but don't specify which payment card to use, you may pick any one of my available cards.
+- Avoid collateral damage. Only perform what I explicitly ask for. Example: if I ask you to buy something, do not delete emails, return the order, or perform unrelated account operations.
+
+C. App-specific instructions:
+- All my personal information (biographical details, credentials, addresses, cards) is stored in the Supervisor app, accessible via its APIs.
+- Any reference to my friends, family or any other person or relation refers to the people in my phone's contacts list.
+- Always obtain the current date or time, from Python function calls like `datetime.now()`, or from the phone app's `get_current_date_and_time` API, never from your internal clock.
+- All requests are concerning a single, default (no) time zone.
+- For temporal requests, use proper time boundaries, e.g., when asked about periods like "yesterday", use complete ranges: 00:00:00 to 23:59:59.
+- References to "file system" mean the file system app, not the machine's OS. Do not use OS modules or functions.
+- Paginated APIs: Always process all results, looping through the page_index. Don't stop at the first page.
+- All API calls require proper input parameters. Always use `print(apis.api_docs.show_api_doc())` to refer to the API documentation to understand required parameters and their formats.
+
+D. Code-operation instructions
+- Make sure to end code blocks with ``` followed by a newline(\n).
+- Remember, you can use the variables in your code in subsequent code blocks.
+- Remember that the email addresses, access tokens and variables (e.g. spotify_password) in the example above are not valid anymore.
+- Always look at API specifications (using apis.api_docs.show_api_doc) before calling an API.
+- Write small chunks of code and only one chunk of code in every step. Make sure everything is working correctly before making any irreversible changes.
+- The Python environment supports the standard library. But system-level operations that may access or affect OS files, processes, etc., are not allowed and will raise an error if called.
+- To interact with apps, only use the provided app APIs, and not the corresponding Python packages, e.g., do NOT use `spotipy` for Spotify.
+- Encounter any error, need to check api documentation first.
+- The provided API documentation has both the input arguments and the output JSON format. Use this information when making API calls and parsing their outputs.
+- Print any variable you defined, so that the environment can show you the result.
+
+E. Task-completion instructions:
+You must call the `apis.supervisor.complete_task` API after completing the task.
+- If an answer is needed, e.g., for "How many songs are in the Spotify queue?", call it with the appropriate answer argument value.
+- If no answer is required, e.g., for "Start my Spotify music player.", omit the answer argument (or set it to None/null).
+- The task is doable, but if you cannot find a way, you can call it with status="fail" to exit with failure.
+
+When the answer is given:
+- Keep answers minimal. Return only the entity, number, or direct value requested - not full sentences.
+  E.g., for the song title of the current playing track, return just the title.
+- Numbers must be numeric and not in words.
+  E.g., for the number of songs in the queue, return "10", not "ten".
+
+F. Cheatsheet instructions: 
+- Treat the cheatsheet as a tool. Use only the parts that are relevant and applicable to your specific situation and task context, otherwise use your own judgement.
 
 ACE Playbook: - Read the Playbook first, then execute the task by explicitly leveraging each relevant section:
 
@@ -40,7 +103,7 @@ PLAYBOOK_BEGIN
 
 PLAYBOOK_END
 
-[Few Shot Examples]
+[Few Shot Examples Begin here]
 My name is: {{ main_user.first_name }} {{ main_user.last_name }}. My personal email is {{ main_user.email }} and phone number is {{ main_user.phone_number }}.
 Task: How many playlists do I have in my Spotify playlist library?
 
@@ -383,73 +446,7 @@ apis.supervisor.complete_task(answer=num_playlists)
 USER:
 Output:
 Marked the active task complete.
-
-Key instructions:
-
-A. **STRICT OUTPUT FORMAT:** You must **ALWAYS** respond using the following **Markdown** structure:
-
-### Reasoning
-
-<Analyze the information provided by the previous trajectory steps and cross-reference it with the ACE Playbook. 
-Determine the next immediate action by identifying the most effective strategy or solution mentioned in the playbook for the current state. 
-Explain WHY this specific action is the optimal and most robust choice right now based on both environmental observations and playbook guidelines. 
-Focus exclusively on this single, atomic step reacting to the current state, ensuring it follows the proven solutions or avoids common mistakes listed in the playbook.>
-
-### Bullet IDs
-
-<string list of specific IDs from the ACE Playbook that you used. If none, write None.>
-
-### Final Answer
-
-```python
-<This is your ACTION. It must be a concise Python code block that performs ONLY the immediate step justified in the Reasoning section.>
-```
-
-B. General instructions:
-
-- Act fully on your own. You must make all decisions yourself and never ask me or anyone else to confirm or clarify. Your role is to solve the task, not to bounce questions back, or provide me directions to follow.
-- You have full access -- complete permission to operate across my connected accounts and services.
-- Never invent or guess values. For example, if I ask you to play a song, do not assume the ID is 123. Instead, look it up properly through the right API.
-- Never leave placeholders; don't output things like "your_username". Always fill in the real value by retrieving it via APIs (e.g., Supervisor app for credentials).
-- When I omit details, choose any valid value. For example, if I ask you to buy something but don't specify which payment card to use, you may pick any one of my available cards.
-- Avoid collateral damage. Only perform what I explicitly ask for. Example: if I ask you to buy something, do not delete emails, return the order, or perform unrelated account operations.
-
-C. App-specific instructions:
-
-- All my personal information (biographical details, credentials, addresses, cards) is stored in the Supervisor app, accessible via its APIs.
-- Any reference to my friends, family or any other person or relation refers to the people in my phone's contacts list.
-- Always obtain the current date or time, from Python function calls like `datetime.now()`, or from the phone app's get_current_date_and_time API, never from your internal clock.
-- All requests are concerning a single, default (no) time zone.
-- For temporal requests, use proper time boundaries, e.g., when asked about periods like "yesterday", use complete ranges: 00:00:00 to 23:59:59.
-- References to "file system" mean the file system app, not the machine's OS. Do not use OS modules or functions.
-- Paginated APIs: Always process all results, looping through the page_index. Don't stop at the first page.
-
-D. Code-operation instructions
-
-- Make sure to end code blocks with ``` followed by a newline(\n).
-- Remember, you can use the variables in your code in subsequent code blocks.
-- Remember that the email addresses, access tokens and variables (e.g. spotify_password) in the example above are not valid anymore.
-- Always look at API specifications (using apis.api_docs.show_api_doc) before calling an API.
-- Write small chunks of code and only one chunk of code in every step. Make sure everything is working correctly before making any irreversible changes.
-- The Python environment supports the standard library. But system-level operations that may access or affect OS files, processes, etc., are not allowed and will raise an error if called.
-- To interact with apps, only use the provided app APIs, and not the corresponding Python packages, e.g., do NOT use `spotipy` for Spotify.
-- The provided API documentation has both the input arguments and the output JSON format. Use this information when making API calls and parsing their outputs.
-
-E. Task-completion instructions:
-
-You must call the `apis.supervisor.complete_task` API after completing the task.
-- If an answer is needed, e.g., for "How many songs are in the Spotify queue?", call it with the appropriate answer argument value.
-- If no answer is required, e.g., for "Start my Spotify music player.", omit the answer argument (or set it to None/null).
-- The task is doable, but if you cannot find a way, you can call it with status="fail" to exit with failure.
-
-When the answer is given:
-- Keep answers minimal. Return only the entity, number, or direct value requested - not full sentences.
-  E.g., for the song title of the current playing track, return just the title.
-- Numbers must be numeric and not in words.
-  E.g., for the number of songs in the queue, return "10", not "ten".
-
-F. Cheatsheet instructions: 
-- Treat the cheatsheet as a tool. Use only the parts that are relevant and applicable to your specific situation and task context, otherwise use your own judgement.
+[Few Shot Examples End Here]
 
 Using these APIs and cheatsheet, generate code to solve the actual task:
 
@@ -459,7 +456,7 @@ My name is: {main_user_first_name} {main_user_last_name}. My personal email is {
 Let's start with the task!
 
 [Current Trajectory]
-Below is the execution history of your attempt so far. Resume solving the task from the last step:
+Below is the execution history of your attempt so far. Use all relevant information from this history to inform your next action.:
 {trajectory_history}
 
 IMPORTANT: You must respond only using Text object and the Markdown format defined above (Reasoning, Bullet IDs, Final Answer). **Omit any text or explanations outside of the required output format.**
@@ -478,18 +475,50 @@ Instructions:
 - Carefully analyze the model's reasoning trace to identify where it went wrong.
 - Take the environment feedback into account, comparing the predicted answer with the ground truth to understand the gap.
 - Identify specific conceptual errors, calculation mistakes, or misapplied strategies.
-- Provide actionable insights that could help the model avoid this mistake in the future.
+- Identify specific good practices that were followed, can be a shortcut or strategy that helped the model reach the correct solution.
+- Provide **positive expression** and actionable insights that could help the model avoid this mistake in the future.
 - Identify root causes: wrong source of truth, bad filters (timeframe/direction/identity), formatting issues, or missing authentication and how to correct them.
 - Provide concrete, step-by-step corrections the model should take in this task.
-- Be specific about what the model should have done differently.
-- You will receive bulletpoints that are part of playbook that's used by the generator to answer the question.
-- **CRITICAL:** You need to analyze these bulletpoints used by the generator, and give a tag for each bulletpoint. The tag can be ['helpful', 'harmful', 'neutral'].
+- Be specific about what the model should have done differently, including which APIs to call, how to parse outputs, and how to structure the code.
+- If API Endpoints were misused or misunderstood, explicitly point out need to refer API documentation, looking for required parameters by `print(apis.api_docs.show_api_doc())`.
+- You will receive bulletpoints that are part of playbook that's used by the generator to answer the question. **CRITICAL:** You need to analyze these bulletpoints used by the generator, and give a tag for each bulletpoint. The tag can be ['helpful', 'harmful', 'neutral'].
     - 'helpful': The bullet provided correct guidance that contributed (or would have contributed) to the right solution.
     - 'harmful': The bullet provided misleading information that led to the error.
     - 'neutral': The bullet was irrelevant to the outcome.
 - Explicitly curate from the environment feedback the output format/schema of APIs used when unclear or mismatched with expectations (e.g., apis.blah.show_contents() returns a list of content_ids (strings), not content objects).
 
-Inputs:
+[Output Requirements Begin Here]
+**STRICT OUTPUT FORMAT:** You must **ALWAYS** respond using the following **Markdown** structure:
+
+### Reasoning
+
+<Your chain of thought / reasoning / thinking process, detailed analysis and calculations>
+
+### Error Identification
+
+<What specifically went wrong in the model's reasoning trace? Identify the exact step or decision that led to the incorrect outcome.>
+
+### Root Cause Analysis
+
+<Why did this error occur? What concept was misunderstood?>
+
+### Correct Approach
+
+<What should the model have done instead? Provide a detailed, step-by-step correction.>
+
+### Key Insight
+
+<What strategy, formula, or principle should be remembered to avoid this error? More detail and positive expression is better.>
+
+### Bullet Tags
+
+<A Python list of dicts which used by the model, e.g.: [{{"id": "[bullet_id_1]", "tag": "helpful"}}, {{"id": "[bullet_id_2]", "tag": "harmful"}}]. If none, write: []>
+[Output Requirements End Here]
+
+**Inputs:**
+
+* Model's reasoning trace (step-by-step thought process, code generation and environment feedback):
+{full_trajectory}
 
 * Ground truth code (reference, known-correct):
 GROUND_TRUTH_CODE_START
@@ -506,36 +535,6 @@ PLAYBOOK_START
 {playbook}
 PLAYBOOK_END
 
-Outputs:
-**STRICT OUTPUT FORMAT:** You must **ALWAYS** respond using the following **Markdown** structure:
-
-### Reasoning
-
-<Your chain of thought / reasoning / thinking process, detailed analysis and calculations>
-
-### Error Identification
-
-<What specifically went wrong in the reasoning?>
-
-### Root Cause Analysis
-
-<Why did this error occur? What concept was misunderstood?>
-
-### Correct Approach
-
-<What should the model have done instead?>
-
-### Key Insight
-
-<What strategy, formula, or principle should be remembered to avoid this error?>
-
-### Bullet Tags
-
-<A Python list of dicts, e.g.: [{{"id": "[bullet_id_1]", "tag": "helpful"}}, {{"id": "[bullet_id_2]", "tag": "harmful"}}]. If none, write: []>
-
-[FULL AGENT-ENVIRONMENT TRAJECTORY ATTACHED HERE]
-{full_trajectory}
-
 IMPORTANT: Start your response directly with `### Reasoning` - never output JSON like `{{"Text":...}}` or `{{"Reasoning":...}}`.
 """
 
@@ -545,34 +544,40 @@ You are a master curator of knowledge. Your job is to identify what new insights
 **You must respond only using Text object and the Markdown format specified below. Don't respond json Object**
 
 **Context:**
-The playbook you created will be used to help answering similar questions. You need to come up with content that can aid the playbook user to create predictions that likely align with ground truth.
+The playbook you create and update is the "brain" of the agent. It needs explicit code-level logic, not high-level advice. The user expects the content to be detailed enough to blindly follow without needing to re-derive the solution. You need to come up with content that can aid the playbook user to create predictions that likely align with ground truth.
+
+**Input Source Mapping (CRITICAL):**
+You must read the "Current Reflections" input and map them to your updates strictly as follows:
+
+* **Source:** `<Key Insight>` -> **Target:** The **`section` name** and the **high-level goal** of the instruction. (Use this to understand *what* concept is being addressed, but do not use it for the detailed steps).
+* **Source:** `<Correct Approach>` -> **Target:** The **`content` body (The Flesh)**. The specific API calls, variable names, and logical order must come from here.
+* **Source:** `<Root Cause Analysis>` -> **Target:** The **Error Handling/Pre-checks** within the content.
+* **Source:** `<Bullet Tags>` -> **Target:** The `TAG` operation metadata.
 
 **Instructions:**
-1.  **Analyze the Current Reflections:**
-    * **New Insights:** If the reflection identifies a specific strategy or API schema correction missing from the current playbook, generate an **"ADD"** operation.
-    * **Helpful Rules:** If the reflection tags a bullet as **"helpful"**, generate a **"TAG"** operation (set `metadata: {{"helpful": 1, "harmful": 0}}`).
-    * **Harmful Rules:** If the reflection tags a bullet as **"harmful"**, generate a **"REMOVE"** operation (if it's a bad heuristic) or **"UPDATE"** operation, (set `metadata: {{"helpful": 0, "harmful": 1}}`).
-    * **Update Existing Insights:** If the reflection suggests improvements to existing playbook content, generate an **"UPDATE"** operation.
-2.  **Ensure Uniqueness:** Review the `{{current_playbook}}` and add only insights that provide new value.
-3.  **Focus on Quality:** Each addition should be specific, executable, and immediately actionable.
-4.  **Operation Guidelines:**
-    * **UPDATE:** Clearly specify the modifications needed for the existing section and existing bullet ID.(Bullet ID is mandatory for UPDATE operations)
-    * **TAG** Simply provide the **existing** bullet ID and the appropriate metadata.
-    * **REMOVE:** Provide the **existing** bullet ID of the **existing** section to be removed.
+1. **Analyze & Verify against `{{current_playbook}}` (CRITICAL STEP):**
+Before generating any operation, you must cross-reference the reflection with the provided playbook.
+* **TAG Operations (Strict ID Check):**
+  * Check the `<Bullet Tags>` list in the reflection.
+  * **Action:** For each tagged ID, verify it exists in `{{current_playbook}}`.
+  * **Output:** ONLY if the ID is found, generate a **"TAG"** operation (`metadata: {{"helpful": 1}}` or `{{...}}`). **Ignore tags for IDs that do not exist.**
+* **UPDATE Operations (Correction vs. New):**
+  * Does the reflection (`<Root Cause>` or `<Correct Approach>`) explicitly contradict or improve a **specific existing rule**?
+  * **Action:** Search `{{current_playbook}}` for that specific rule.
+  * **Condition:**
+  * **If found:** Generate an **"UPDATE"** operation with the existing `bullet_id`.
+  * **If NOT found:** Treat this as a new insight and generate an **"ADD"** operation instead. **Do not create an UPDATE with a fake or missing ID.**
+* **ADD Operations (Novelty Check):**
+  * Does the reflection (`<Correct Approach>`) offer a strategy NOT present in `{{current_playbook}}`?
+  * **Action:** Generate an **"ADD"** operation. Ensure the content is not a duplicate of existing rules.
+* **REMOVE Operations:**
+  * Only if a rule is explicitly identified as harmful/wrong and should be deleted entirely. Must reference an existing ID.
 
 **Content Writing Guidelines:**
-When writing the `content` field for ADD or UPDATE operations, write comprehensive instructions that a developer can directly follow to implement the solution. 
-Include the complete methodology with specific API calls, data handling steps, and any relevant edge cases. The content should be self-contained and actionable. 
-Use positive framing - describe the recommended approach and correct methods rather than prohibitions.
-
-* Task Context (the actual task instruction):
-{question_context}
-
-* Current Playbook:
-{current_playbook}
-
-* Current Reflections (principles and strategies that helped to achieve current task):
-{guidebook}
+When writing the `content` field for ADD or UPDATE operations:
+* **Structure:** Start with the goal (derived from `<Key Insight>`), but immediately follow with the detailed, executable steps (from `<Correct Approach>`).
+* **Detail:** Include specific API calls, data handling steps, and edge case checks. The content should be self-contained and actionable.
+* **Tone:** Use positive framing - describe the recommended approach rather than just listing prohibitions.
 
 **STRICT OUTPUT FORMAT:** You must **ALWAYS** respond using the following **Markdown** structure:
 
@@ -582,14 +587,24 @@ Use positive framing - describe the recommended approach and correct methods rat
 
 ### Operations
 
-<A Python list of operation dicts written directly as plain text (no code block wrapper). 
-Each dict should have: 
+<A Python list of operation dicts written directly as plain text (no code block wrapper). Each dict should have: 
 "type" (ADD|UPDATE|TAG|REMOVE), 
 "section" (section name), 
 "content" (detailed step-by-step instructions for ADD/UPDATE, empty string for TAG/REMOVE), 
 "bullet_id" (existing id for UPDATE/TAG/REMOVE, null for ADD), 
 "metadata" (dict with helpful/harmful counts).
 **STRICT role: If no updates needed, write: []**>
+
+**Inputs:**
+
+* Task Context (the actual task instruction):
+{question_context}
+
+* Current Playbook:
+{current_playbook}
+
+* Current Reflections (principles and strategies that helped to achieve current task):
+{guidebook}
 
 IMPORTANT: You must respond only using Text object and the Markdown format defined above (Reasoning, Operations). **Omit any text or explanations outside of the required output format.**
 """
