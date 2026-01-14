@@ -42,7 +42,7 @@ Focus exclusively on this single, atomic step reacting to the current state, ens
 
 ### Bullet IDs
 
-<string list of specific IDs from the ACE Playbook that you used. If none, write None.>
+<list of specific IDs from the ACE Playbook that you used. If none, write None. e.g. ["bullet_id_1", "bullet_id_2"]>
 
 ### Final Answer
 
@@ -78,13 +78,13 @@ D. Code-operation instructions
 - To interact with apps, only use the provided app APIs, and not the corresponding Python packages, e.g., do NOT use `spotipy` for Spotify.
 - Encounter any error, need to check api documentation first.
 - The provided API documentation has both the input arguments and the output JSON format. Use this information when making API calls and parsing their outputs.
-- Print any variable you defined, so that the environment can show you the result.
+- **Print any variable you defined, so that the environment can show you the result.**
 
 E. Task-completion instructions:
 You must call the `apis.supervisor.complete_task` API after completing the task.
-- If an answer is needed, e.g., for "How many songs are in the Spotify queue?", call it with the appropriate answer argument value.
-- If no answer is required, e.g., for "Start my Spotify music player.", omit the answer argument (or set it to None/null).
-- The task is doable, but if you cannot find a way, you can call it with status="fail" to exit with failure.
+- For Informational Queries (Questions): If the user's request requires extracting specific data or answering a question (e.g., "What is...", "How many...", "List all..."), you MUST populate the answer argument with the exact requested information.
+- For Operational Commands (Actions): If the user's request is a directive to perform an action (e.g., "Play music", "Set volume", "Delete file") and does not explicitly ask for a return value, you MUST set the answer argument to None. Do not provide confirmation messages like "Done" or "Task completed" in the answer field.
+- The task is doable, but if you cannot find a way, you can call it with `apis.supervisor.complete_task(status="fail")` to exit with failure.
 
 When the answer is given:
 - Keep answers minimal. Return only the entity, number, or direct value requested - not full sentences.
@@ -92,8 +92,10 @@ When the answer is given:
 - Numbers must be numeric and not in words.
   E.g., for the number of songs in the queue, return "10", not "ten".
 
-F. Cheatsheet instructions: 
-- Treat the cheatsheet as a tool. Use only the parts that are relevant and applicable to your specific situation and task context, otherwise use your own judgement.
+F. Playbook instructions: 
+- Treat the playbook as a tool. Use only the parts that are relevant and applicable to your specific situation and task context, otherwise use your own judgement.
+- Always cross-reference your reasoning with the playbook before taking any action.
+- When using the playbook, always include the specific bullet IDs you are leveraging in your response.
 
 ACE Playbook: - Read the Playbook first, then execute the task by explicitly leveraging each relevant section:
 
@@ -483,7 +485,7 @@ Instructions:
 - If API Endpoints were misused or misunderstood, explicitly point out need to refer API documentation, looking for required parameters by `print(apis.api_docs.show_api_doc())`.
 - You will receive bulletpoints that are part of playbook that's used by the generator to answer the question. **CRITICAL:** You need to analyze these bulletpoints used by the generator, and give a tag for each bulletpoint. The tag can be ['helpful', 'harmful', 'neutral'].
     - 'helpful': The bullet provided correct guidance that contributed (or would have contributed) to the right solution.
-    - 'harmful': The bullet provided misleading information that led to the error.
+    - 'harmful': The bullet provided misleading information that led to the error, or omitted critical information that caused the error.
     - 'neutral': The bullet was irrelevant to the outcome.
 - Explicitly curate from the environment feedback the output format/schema of APIs used when unclear or mismatched with expectations (e.g., apis.blah.show_contents() returns a list of content_ids (strings), not content objects).
 
@@ -520,6 +522,11 @@ Instructions:
 * Model's reasoning trace (step-by-step thought process, code generation and environment feedback):
 {full_trajectory}
 
+* ACE playbook (playbook that's used by model for code generation):
+PLAYBOOK_START
+{playbook}
+PLAYBOOK_END
+
 * Ground truth code (reference, known-correct):
 GROUND_TRUTH_CODE_START
 {ground_truth_code}
@@ -529,11 +536,6 @@ GROUND_TRUTH_CODE_END
 TEST_REPORT_START
 {unit_test_results}
 TEST_REPORT_END
-
-* ACE playbook (playbook that's used by model for code generation):
-PLAYBOOK_START
-{playbook}
-PLAYBOOK_END
 
 IMPORTANT: Start your response directly with `### Reasoning` - never output JSON like `{{"Text":...}}` or `{{"Reasoning":...}}`.
 """
@@ -570,20 +572,24 @@ Before generating any operation, you must cross-reference the reflection with th
 * **ADD Operations (Novelty Check):**
   * Does the reflection (`<Correct Approach>`) offer a strategy NOT present in `{{current_playbook}}`?
   * **Action:** Generate an **"ADD"** operation. Ensure the content is not a duplicate of existing rules.
-* **REMOVE Operations:**
-  * Only if a rule is explicitly identified as harmful/wrong and should be deleted entirely. Must reference an existing ID.
+* **REMOVE Operations (Purge Toxic Rules):**
+  * **Condition:** You **MUST** generate a REMOVE operation if the rule is tagged as **"harmful"** AND meets **ANY** of the following criteria: 
+    1. **Irredeemable:** The reflection offers no specific strategy to fix it (i.e., you are **not** generating an accompanying "UPDATE").
+    2. **Accumulated Failure:** Inspect the `metadata` in `{{current_playbook}}`. If the existing `harmful` count is high (e.g., **≥  3**) and the rule failed again, it is proven unreliable.
+  * **Rationale:** A rule that repeatedly fails (high harmful count) or has no clear fix is ​​"toxic" to the system. Removing it is better than keeping a bad heuristic.
+  * **Requirement:** Provide the **existing** bullet ID.
 
 **Content Writing Guidelines:**
 When writing the `content` field for ADD or UPDATE operations:
 * **Structure:** Start with the goal (derived from `<Key Insight>`), but immediately follow with the detailed, executable steps (from `<Correct Approach>`).
 * **Detail:** Include specific API calls, data handling steps, and edge case checks. The content should be self-contained and actionable.
-* **Tone:** Use positive framing - describe the recommended approach rather than just listing prohibitions.
+* **Tone**: **Direct Prescriptive Phrasing.** Formulate the content as an absolute rule. Focus entirely on the solution logic. **Eliminate all context about the error or previous incorrect attempts.** (e.g., Write "Use play_count to determine popularity" directly, do NOT write "Avoid using like_count").
 
 **STRICT OUTPUT FORMAT:** You must **ALWAYS** respond using the following **Markdown** structure:
 
 ### Reasoning
 
-<How you decided on the updates>
+<How you decided on the updates, your analysis of the reflection against the current playbook, and justification for each operation.>
 
 ### Operations
 
