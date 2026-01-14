@@ -34,7 +34,6 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional, Dict, List, Sequence, TYPE_CHECKING
 import re
-import ast
 
 from src.opence.models.clients import LLMClient
 from src.opence.methods.ace.roles import (
@@ -48,7 +47,7 @@ from src.opence.methods.ace.roles import (
     _format_optional,
     _safe_json_loads,
 )
-from src.opence.methods.ace.playbook import Playbook
+from src.opence.methods.ace.playbook import Playbook, Bullet
 from .appworld_prompts import (
     APPWORLD_GENERATOR_PROMPT,
     APPWORLD_REFLECTOR_PROMPT,
@@ -182,6 +181,22 @@ def _markdown_parser(md_text: str, schema: dict) -> dict:
         final_result[key] = content
 
     return final_result
+
+def _bullet_as_prompt(bullets: Bullet) -> str:
+    """Format a Bullet object as a prompt string for inclusion in LLM prompts.
+
+    Args:
+        bullet: Bullet object to format
+
+    Returns:
+        Formatted string representation of the bullet
+    """
+    prompts = ""
+    for bullet in bullets:
+        prompts += f"- Section: {bullet.section}\n  ID: {bullet.id}\n  Content: {bullet.content}\n"
+
+    return prompts if prompts else "empty playbook"
+
 
 class AppWorldGenerator(Generator):
     """AppWorld-specific Generator that handles AppWorld task format.
@@ -450,7 +465,7 @@ class AppWorldReflector(Reflector):
     def reflect(
         self,
         *,
-        playbook: Playbook,
+        playbook: List[Bullet],
         ground_truth: Optional[str],
         feedback: Optional[str],
         unit_test_results: Optional[str] = None,
@@ -476,12 +491,15 @@ class AppWorldReflector(Reflector):
         base_prompt = self.prompt_template.format(
             ground_truth_code=_format_optional(ground_truth),
             unit_test_results=_format_optional(unit_test_results),
-            playbook=playbook.as_prompt() or "(empty playbook)",
+            playbook=_bullet_as_prompt(playbook) or "(empty playbook)",
             full_trajectory=_format_optional(feedback),
         )
 
         result: Optional[ReflectorOutput] = None
         prompt = base_prompt
+
+        # self.logger.debug(f"Reflector Prompt: {prompt}")
+
         last_error: Optional[Exception] = None
 
         for round_idx in range(max_refinement_rounds):
