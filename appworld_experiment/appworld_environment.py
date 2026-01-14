@@ -96,7 +96,7 @@ class AppWorldEnvironment:
                 - ... other fields from AppWorld API
         """
         self._log_info(f"Executing code for task {task_id}")
-        self._log_info(f"Code:\n{code}")
+        # self._log_info(f"Code:\n{code}")
 
         payload = {
             "task_id": task_id,
