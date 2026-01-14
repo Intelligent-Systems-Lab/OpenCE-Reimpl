@@ -231,6 +231,7 @@ class AppWorldAdapterBase(AdapterBase):
         # Multi-step interaction loop
         execution_status = ExecutionStatus.MAX_STEPS_REACHED  # Default status
         final_generator_output = None
+        PLAYBOOK_USED_SNAPSHOT = []
 
         for interaction_step in range(1, self.max_interaction_steps + 1):
             self._log_info(f"Interaction Step {interaction_step}/{self.max_interaction_steps}")
@@ -274,6 +275,10 @@ class AppWorldAdapterBase(AdapterBase):
                     code=code,
                     observation=observation,
                 )
+
+                # Store used playbook snapshot for reflection
+                PLAYBOOK_USED_SNAPSHOT.extend(self.playbook.get_bullet(bid) for bid in generator_output.bullet_ids if self.playbook.get_bullet(bid) and self.playbook.get_bullet(bid) not in PLAYBOOK_USED_SNAPSHOT)
+                # self.logger.debug(f"Playbook bullets used this step: {generator_output.bullet_ids}")
 
                 # Check if task is completed via environment API
                 if environment.is_task_completed(sample.task_id):
@@ -326,7 +331,7 @@ class AppWorldAdapterBase(AdapterBase):
 
         # Reflection - use trajectory for analysis
         reflection = self.reflector.reflect(
-            playbook=self.playbook,
+            playbook=PLAYBOOK_USED_SNAPSHOT,
             ground_truth=env_result.ground_truth,
             feedback=sample.context,  # Pass full trajectory as feedback
             unit_test_results=unit_test_output,  # Pass unit test results
