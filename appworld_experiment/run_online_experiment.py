@@ -97,8 +97,15 @@ def parse_args() -> argparse.Namespace:
         "--split",
         type=str,
         default="dev",
-        choices=["train", "dev", "test_normal", "test_challenge"],
+        choices=["train", "dev", "test_normal", "test_challenge", "difficulty_1", "difficulty_2", "difficulty_3"],
         help="Dataset split to use. Default: dev (for online evaluation).",
+    )
+    parser.add_argument(
+        "--tasks",
+        nargs="+", # "+" means one or more arguments will automatically be gathered into a list, and at least one is required
+        type=str,
+        default=None,
+        help="Run only on specific task IDs (for testing). e.g  --tasks 07b42fd_1 07b42fd_2 to run tasks with indices 07b42fd_1 and 07b42fd_2. Default: run all tasks.",
     )
     return parser.parse_args()
 
@@ -129,6 +136,9 @@ def main() -> None:
     if args.max_samples:
         samples = all_samples[:args.max_samples]
         logger.info(f"Limited to {args.max_samples} samples (out of {len(all_samples)})")
+    elif args.tasks is not None:
+        samples = [s for s in all_samples if isinstance(s, AppWorldSample) and s.task_id in args.tasks]
+        logger.info(f"Filtered to {len(samples)} samples for specified tasks (out of {len(all_samples)})")
     else:
         samples = all_samples
 
@@ -150,11 +160,16 @@ def main() -> None:
         api_key=api_key,
         base_url=base_url
     )
+    
+    openai_client = OpenAIClient(
+        model="gpt-4o-mini",
+        api_key=api_key
+    )
 
     # Use AppWorld-specific roles with logger
-    generator = AppWorldGenerator(client, logger=logger)
-    reflector = AppWorldReflector(client, logger=logger)
-    curator = AppWorldCurator(client, logger=logger)
+    generator = AppWorldGenerator(openai_client, logger=logger)
+    reflector = AppWorldReflector(openai_client, logger=logger)
+    curator = AppWorldCurator(openai_client, logger=logger)
 
     # Use AppWorld online adapter with logger
     adapter = AppWorldOnlineAdapter(

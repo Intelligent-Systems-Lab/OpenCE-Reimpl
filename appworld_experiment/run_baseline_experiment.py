@@ -79,7 +79,20 @@ def parse_args() -> argparse.Namespace:
         "--split",
         type=str,
         default="dev",
-        help="Dataset split to use for baseline (dev, test_normal, test_challenge), default: dev",
+        choices=["dev", "test_normal", "test_challenge", "difficulty_1", "difficulty_2", "difficulty_3"],
+        help="Dataset split to use for baseline (dev, test_normal, test_challenge, difficulty_1, difficulty_2, difficulty_3), default: dev",
+    )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=None,
+        help="Maximum number of samples to process (for testing). Default: process all samples.",
+    )
+    parser.add_argument(
+        "--tasks",
+        type=List[str],
+        default=None,
+        help="Run only on specific task IDs (for testing). e.g  --tasks 07b42fd_1, 07b42fd_2 to run tasks with indices 07b42fd_1 and 07b42fd_2. Default: run all tasks.",
     )
     return parser.parse_args()
 
@@ -106,6 +119,12 @@ def main() -> None:
     dataset = AppWorldDataset(os.getenv("APPWORLD_DATA_PATH", "/home/yanhong/appworld-server/data"))
     samples: List[Sample] = dataset.load_samples(split=args.split)
 
+    if args.max_samples is not None:
+        samples = samples[: args.max_samples]
+    elif args.tasks is not None:
+        task_ids = [task_id.strip() for task_id in args.tasks.split(",")]
+        samples = [s for s in samples if isinstance(s, AppWorldSample) and s.task_id in task_ids]
+    
     logger.info(f"Loaded {len(samples)} samples")
 
     config = ExperimentConfig(
@@ -126,8 +145,13 @@ def main() -> None:
         base_url=base_url
     )
 
+    openai_client = OpenAIClient(
+        model="gpt-4o-mini",
+        api_key=api_key
+    )
+
     # Use AppWorld-specific roles with logger
-    generator = AppWorldGenerator(client, logger=logger)
+    generator = AppWorldGenerator(openai_client, logger=logger)
 
     # Use AppWorld-specific adapter with logger
     adapter = AppworldBaselineAdapter(
