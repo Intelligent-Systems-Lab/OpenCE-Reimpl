@@ -848,6 +848,7 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
         self,
         samples: Iterable[Sample],
         environment: TaskEnvironment,
+        epochs: int = 1,
     ) -> List[AdapterStepResult]:
         """Run online adaptation with continuous playbook learning.
 
@@ -875,32 +876,34 @@ class AppWorldOnlineAdapter(AppWorldAdapterBase):
         results: List[AdapterStepResult] = []
         bullet_ids_buffer = []  # Buffer for collecting bullet IDs
         sample_counter = 0  # Track samples processed
+        
+        for epoch in range(epochs):
+            self._log_info(f"=== Epoch {epoch + 1}/{epochs} ===")
+            for step_idx, sample in enumerate(samples, start=1):
+                self._log_info(f"[Online] Processing sample {step_idx}")
+                result = self._process_sample(
+                    sample,
+                    environment,
+                    epoch=1,
+                    step_index=step_idx,
+                )
+                results.append(result)
 
-        for step_idx, sample in enumerate(samples, start=1):
-            self._log_info(f"[Online] Processing sample {step_idx}")
-            result = self._process_sample(
-                sample,
-                environment,
-                epoch=1,
-                step_index=step_idx,
-            )
-            results.append(result)
+                # Collect bullet IDs
+                new_bullet_ids = [
+                    op.bullet_id
+                    for op in result.curator_output.delta.operations
+                    if op.bullet_id
+                ]
+                bullet_ids_buffer.extend(new_bullet_ids)
+                sample_counter += 1
 
-            # Collect bullet IDs
-            new_bullet_ids = [
-                op.bullet_id
-                for op in result.curator_output.delta.operations
-                if op.bullet_id
-            ]
-            bullet_ids_buffer.extend(new_bullet_ids)
-            sample_counter += 1
-
-            # Sample-based deduplication (if enabled)
-            if self.deduplicator and self.dedup_frequency > 0:
-                if sample_counter % self.dedup_frequency == 0:
-                    self._log_info(f"[Deduplication] Processing after {sample_counter} samples")
-                    self.playbook.deduplicate(self.deduplicator, bullet_ids_buffer)
-                    bullet_ids_buffer = []  # Clear buffer after dedup
+                # Sample-based deduplication (if enabled)
+                if self.deduplicator and self.dedup_frequency > 0:
+                    if sample_counter % self.dedup_frequency == 0:
+                        self._log_info(f"[Deduplication] Processing after {sample_counter} samples")
+                        self.playbook.deduplicate(self.deduplicator, bullet_ids_buffer)
+                        bullet_ids_buffer = []  # Clear buffer after dedup
 
         # Final deduplication for any remaining bullets in buffer
         if self.deduplicator and bullet_ids_buffer:
