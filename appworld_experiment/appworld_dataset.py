@@ -137,5 +137,9 @@ class AppWorldDataset:
             samples.append(sample)
             _fallback_logger.debug(f"Successfully loaded task: {task_id}")
 
+        # # shuffle samples for randomness
+        # import random
+        # random.shuffle(samples)
+
         _fallback_logger.info(f"Loaded {len(samples)} samples for split: {split}")
         return samples
