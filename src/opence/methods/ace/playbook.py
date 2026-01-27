@@ -152,6 +152,8 @@ class Playbook:
     def apply_delta(self, delta: DeltaBatch) -> None:
         for operation in delta.operations:
             self._apply_operation(operation)
+        # drop out harmful bullets after applying delta
+        self.drop_out_harmful()
 
     def _apply_operation(self, operation: DeltaOperation) -> None:
         op_type = operation.type.upper()
@@ -179,6 +181,23 @@ class Playbook:
             if operation.bullet_id is None:
                 return
             self.remove_bullet(operation.bullet_id)
+
+    def drop_out_harmful(self, threshold: int = 3) -> None:
+        """
+        Removes bullets tagged as harmful above a certain threshold.
+
+        Args:
+            threshold: The harmful tag count threshold.
+        Returns:
+            None
+        """
+        removed_ids = [
+            bullet_id
+            for bullet_id, bullet in self._bullets.items()
+            if bullet.harmful >= threshold
+        ]
+        for bullet_id in removed_ids:
+            self.remove_bullet(bullet_id)
 
     def deduplicate(self, deduplicator: Deduplicator, bullet_ids: List[str]) -> List[str]:
         """
@@ -216,7 +235,6 @@ class Playbook:
         """Return a human-readable playbook string for prompting LLMs."""
         parts: List[str] = []
         for section, bullet_ids in sorted(self._sections.items()):
-            parts.append(f"## {section}")
             for bullet_id in bullet_ids:
                 if bullet_id not in self._bullets:
                     continue
