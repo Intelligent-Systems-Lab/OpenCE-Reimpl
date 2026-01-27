@@ -466,7 +466,7 @@ class AppWorldReflector(Reflector):
         self,
         *,
         playbook: List[Bullet],
-        ground_truth: Optional[str],
+        question_context: str,
         feedback: Optional[str],
         unit_test_results: Optional[str] = None,
         max_refinement_rounds: int = 1,
@@ -489,7 +489,7 @@ class AppWorldReflector(Reflector):
         """
         # Format prompt with AppWorld-specific parameters
         base_prompt = self.prompt_template.format(
-            ground_truth_code=_format_optional(ground_truth),
+            question_context=question_context,
             unit_test_results=_format_optional(unit_test_results),
             playbook=_bullet_as_prompt(playbook) or "(empty playbook)",
             full_trajectory=_format_optional(feedback),
