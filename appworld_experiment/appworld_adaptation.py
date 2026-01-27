@@ -332,7 +332,7 @@ class AppWorldAdapterBase(AdapterBase):
         # Reflection - use trajectory for analysis
         reflection = self.reflector.reflect(
             playbook=PLAYBOOK_USED_SNAPSHOT,
-            ground_truth=env_result.ground_truth,
+            question_context=self._question_context(sample, env_result),
             feedback=sample.context,  # Pass full trajectory as feedback
             unit_test_results=unit_test_output,  # Pass unit test results
             max_refinement_rounds=self.max_refinement_rounds,
