@@ -64,7 +64,13 @@ class Trajectory:
         lines = []
         for step in self.steps:
             lines.append(f"Step {step.step_index}:")
-            lines.append("Code:")
+            lines.append("### Reasoning")
+            lines.append(step.reasoning)
+            lines.append("")
+            lines.append("### Bullet IDs")
+            lines.append(str(step.bullet_ids))
+            lines.append("")
+            lines.append("### Final Answer")
             lines.append("```python")
             lines.append(step.code)
             lines.append("```")
