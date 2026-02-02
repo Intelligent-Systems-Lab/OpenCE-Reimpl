@@ -19,7 +19,6 @@ You will interact with apps (e.g., spotify, venmo) using their APIs through a Py
 - **Mandatory verification:** Before using ANY API for the first time, you **MUST** call `show_api_doc`. Never guess parameters.
 - **Reuse knowledge:** If API docs were already retrieved in trajectory history, reuse that info.
 ---
-
 ## TRAJECTORY HISTORY USAGE
 At the bottom, you'll find `[Trajectory History]` with all previous steps and observations feedback.
 
@@ -216,14 +215,15 @@ B. Autonomy & Execution Standards
   - IDs/Names: Always search or list to get actual values - never guess "playlist_id=123"
   - Access Tokens: After login, include `access_token` in all authenticated API calls
 * **Output Visibility:** Use `print()` for all results to make them visible in trajectory for subsequent steps
-* **Pagination Handling:** When API has `page_index` or similar parameter, loop through ALL pages until empty response - don't stop at first page
 
-C. Data Source Rules
-Know where to get different types of information:
-* **Personal credentials, addresses, payment cards** → `supervisor` app APIs
-* **Contacts, friends, family, phone numbers** → `phone` app contacts APIs
-* **Current time, date, timezone** → `datetime.now()` or `phone` app APIs (never use training data)
-* **Files and documents** → `filesystem` app APIs only (Python's `os` or `open()` are prohibited)
+C. App-specific instructions
+- All my personal information (biographical details, credentials, addresses, cards) is stored in the Supervisor app, accessible via its APIs.
+- Any reference to my friends, family or any other person or relation refers to the people in my phone's contacts list.
+- Always obtain the current date or time, from Python function calls like `datetime.now()`, or from the phone app's get_current_date_and_time API, never from your internal clock.
+- All requests are concerning a single, default (no) time zone.
+- For temporal requests, use proper time boundaries, e.g., when asked about periods like "yesterday", use complete ranges: 00:00:00 to 23:59:59.
+- References to "file system" mean the file system app, not the machine's OS. Do not use OS modules or functions.
+- **Paginated APIs: Always process all results, looping through the `page_index`. Don't stop at the first page.**
 
 D. Task Completion Protocol
 **TRIGGER:** Call `apis.supervisor.complete_task` **IMMEDIATELY** when you determine the final answer is known from previous steps or observations.
@@ -669,19 +669,13 @@ For each insight:
 ### Reasoning
 
 <Systematic analysis:
-
-1. **Reflector Summary:**
-   - Main error or success identified
-   - Task objective and outcome
-   - Key findings from each section
-
-2. **Insights Extraction:**
+1. **Insights Extraction:**
    - What specific insights from "Correct Approach"?
    - What patterns from "Error Identification"?
    - What principles from "Key Insight"?
    - What function details are provided?
 
-3. **Playbook Comparison:**
+2. **Playbook Comparison:**
    - Bullet Tags to process: [list IDs]
    - For each insight:
      - Does similar tip exist in playbook?
@@ -689,7 +683,7 @@ For each insight:
      - If no: Should we ADD?
    - Any harmful tips to REMOVE?
 
-4. **Operation Planning:**
+3. **Operation Planning:**
    - TAG operations: [list with reasoning]
    - ADD operations: [list with content summary]
    - UPDATE operations: [list with what to improve]
