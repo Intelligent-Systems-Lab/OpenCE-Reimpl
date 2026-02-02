@@ -1,71 +1,63 @@
 import os
 import json
 from pathlib import Path
+from dotenv import load_dotenv
+from sklearn import metrics
+load_dotenv()
 
 ROOT = Path(__file__).resolve().parents[1]
 GT = ROOT / "ground_truth"
-GT_LIST = os.listdir(GT)
-IGNORE_API_CALL = ["/api_docs/app_descriptions",
-                   "/api_docs/api_descriptions",
-                   "/api_docs/api_doc"]
+LOGS_PATH = os.getenv("LOG_FILE_PATH", "undefined_path")
 
-TASK_PATH = "/home/yanhong/appworld-server/experiments/outputs/appworld_ace_online_20251231_053904/tasks"
-TASK_LIST = os.listdir(TASK_PATH)
 full_data = {}
+scenario_summary = {}
 
-def compute_score(gt_calls, pred_calls):
-    total_calls = len(gt_calls)
-    currect_calls = 0
+def compute_sgc_summary(scenario: dict) -> dict:
+    total_scenarios = len(scenario)
+    passed_scenarios = 0
 
-    for pred, gt in zip(pred_calls, gt_calls):
-        if pred["url"] == gt["url"] and pred["data"] == gt["data"]:
-            currect_calls += 1
-    
-    return currect_calls / total_calls if total_calls > 0 else 0.0
-
-def load_ground_truth():
-    for folder in GT_LIST:
-        api_call_file = GT / folder / "api_calls.jsonl"
-        task_id = folder.split("_")[0] + "_" + folder.split("_")[1]
-    
-        if task_id not in full_data:
-            continue
-        print(f"Processing task: {task_id}")
-        data = full_data[task_id]
+    scenario_keys = sorted(scenario.keys())
+    for scenario_id in scenario_keys:
+        passed_scenario = 0
+        for subtask_id in scenario[scenario_id]:
+            if scenario[scenario_id][subtask_id] == 1.0:
+                passed_scenario += 1
+        print(f"Scenario {scenario_id}: Passed {passed_scenario}/{len(scenario[scenario_id])} subtasks.")
+        if passed_scenario == len(scenario[scenario_id]):
+            passed_scenarios += 1
+            print(f"Scenario {scenario_id} passed all subtasks.")
+    return {
+        "total_scenarios": total_scenarios,
+        "passed_scenarios": passed_scenarios,
+        "sgc_score": passed_scenarios / total_scenarios if total_scenarios > 0 else 0.0
+    }
         
-        with open(api_call_file, "r") as f:
-            lines = f.readlines()
-        data["gt"] = [json.loads(line) for line in lines]
-        full_data[task_id] = data
 
-def load_predictions():
-    for task in TASK_LIST:
-        data = {"gt": [], "pred": []}
-        api_call_file = os.path.join(TASK_PATH, task, "logs", "api_calls.jsonl")
-        task_id = task.split("_")[0] + "_" + task.split("_")[1]
-        print(f"Processing task: {task_id}")
+def load_tgc():
+    with open(LOGS_PATH, "r") as f:
+        logs = json.load(f) 
+    for phase in logs["phases"]:
+        for task in logs["phases"][phase]["per_task_results"]:
+            scenario_id = task["task_id"].split("_")[0]
+            if scenario_id not in scenario_summary:
+                scenario_summary[scenario_id] = {}
 
-        with open(api_call_file, "r") as f:
-            lines = f.readlines()
-        data["pred"] = [json.loads(line) for line in lines if json.loads(line)["url"] not in IGNORE_API_CALL]
-        full_data[task_id] = data
+            scenario_summary[scenario_id][task["task_id"]] = task["tgc"]
 
 def evaluate():
-    load_predictions()
-    load_ground_truth()
+    load_tgc()
 
-    results = {}
-    for task_id, data in full_data.items():
-        gt_calls = data["gt"]
-        pred_calls = data["pred"]
-        score = compute_score(gt_calls, pred_calls)
-        results[task_id] = score
-        print(f"Task {task_id} - Score: {score}")
-    return results
+    result = compute_sgc_summary(scenario_summary)
+    
+    return result
 
 if __name__ == "__main__":
     res = evaluate()
-    print(f"Average Score: {sum(res.values()) / len(res)}")
+    print("SGC Evaluation Results:")
+    print(f"Total Scenarios: {res['total_scenarios']}")
+    print(f"Passed Scenarios: {res['passed_scenarios']}")
+    print(f"SGC Score: {res['sgc_score']:.4f}")
+
 
 
 
