@@ -146,7 +146,7 @@ def main() -> None:
     )
 
     openai_client = OpenAIClient(
-        model="gpt-4o-mini",
+        model="gpt-4o-mini-2024-07-18",
         api_key=api_key
     )
 

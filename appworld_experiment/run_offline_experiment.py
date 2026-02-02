@@ -107,7 +107,14 @@ def parse_args() -> argparse.Namespace:
         "--split",
         type=str,
         default="dev",
-        help="Dataset split to use for evaluation (dev, test_normal, test_challenge), default: dev",
+        choices=["train", "dev", "test_normal", "test_challenge", "difficulty_1", "difficulty_2", "difficulty_3"],
+        help="Dataset split to use for evaluation (dev, test_normal, test_challenge, difficulty_1, difficulty_2, difficulty_3), default: dev",
+    )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=None,
+        help="Maximum number of samples to process (for testing). Default: process all samples.",
     )
     return parser.parse_args()
 
@@ -131,11 +138,16 @@ def main() -> None:
     max_interaction_steps = args.max_interaction_steps
     max_refinement_rounds = args.max_refinement_rounds
     epochs = args.epochs
+    max_samples = args.max_samples
 
     # Load dataset - train split for training, test split for evaluation
     dataset = AppWorldDataset(os.getenv("APPWORLD_DATA_PATH", "/home/yanhong/appworld-server/data"))
-    train_samples: List[Sample] = dataset.load_samples(split="train")
+    train_samples: List[Sample] = dataset.load_samples(split=args.split)
     test_samples: List[Sample] = dataset.load_samples(split=args.split)
+
+    if max_samples is not None:
+        train_samples = train_samples[:max_samples]
+        test_samples = test_samples[:max_samples]
 
     logger.info(f"Loaded {len(train_samples)} training samples")
     logger.info(f"Loaded {len(test_samples)} test samples")
@@ -158,10 +170,15 @@ def main() -> None:
         base_url=base_url
     )
 
+    openai_client = OpenAIClient(
+        model="gpt-4o-mini-2024-07-18",
+        api_key=api_key
+    )
+
     # Use AppWorld-specific roles with logger
-    generator = AppWorldGenerator(client, logger=logger)
-    reflector = AppWorldReflector(client, logger=logger)
-    curator = AppWorldCurator(client, logger=logger)
+    generator = AppWorldGenerator(openai_client, logger=logger)
+    reflector = AppWorldReflector(openai_client, logger=logger)
+    curator = AppWorldCurator(openai_client, logger=logger)
 
     # Use AppWorld-specific adapter with logger
     adapter = AppWorldOfflineAdapter(
@@ -240,7 +257,6 @@ def main() -> None:
             logger.debug(f"  Model final answer: {result.generator_output.final_answer if result.generator_output else 'N/A'}")
             logger.debug(f"  Feedback: {result.environment_result.feedback}")
             logger.debug(f"  TGC: {result.environment_result.metrics.get('tgc', 0):.2%}")
-            logger.debug(f"  SGC: {result.environment_result.metrics.get('sgc', 0):.0f}")
 
         # Final summary
         logger.info("=" * 60)

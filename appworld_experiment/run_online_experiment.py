@@ -1,16 +1,4 @@
 #!/usr/bin/env python3
-"""Run ACE online adaptation loop with AppWorld environment.
-
-Online adaptation processes samples in a streaming fashion, updating the
-playbook after each sample. This is suitable for continuous learning scenarios
-where samples arrive sequentially.
-
-Key differences from offline adaptation:
-- No epochs: processes samples once in order
-- Immediate playbook updates after each sample
-- Suitable for production deployment and continuous learning
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -88,6 +76,12 @@ def parse_args() -> argparse.Namespace:
         help="Perform deduplication every N samples (0=disabled, >0=every N samples)",
     )
     parser.add_argument(
+        "--epochs",
+        type=int,
+        default=int(os.getenv("EPOCHS", "1")),
+        help="Number of epochs to run (default 1 for online evaluation).",
+    )
+    parser.add_argument(
         "--max-samples",
         type=int,
         default=None,
@@ -162,7 +156,7 @@ def main() -> None:
     )
     
     openai_client = OpenAIClient(
-        model="gpt-4o-mini",
+        model="gpt-4o-mini-2024-07-18",
         api_key=api_key
     )
 
@@ -199,7 +193,7 @@ def main() -> None:
 
     try:
         # Run online adaptation (processes samples with continuous learning)
-        results = adapter.run(samples, environment)
+        results = adapter.run(samples, environment, epochs=args.epochs)
 
         # Log experiment summary
         logger.log_experiment_summary()
