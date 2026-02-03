@@ -45,6 +45,13 @@ class AppWorldEnvironment:
         else:
             _fallback_logger.info(message)
 
+    # ==================== Info collection ====================
+    def show_task_info(self, task_id: str) -> dict:
+        """Show task information from AppWorld."""
+        response = self.client.get(f"/tasks/{task_id}")
+        output = response.json()['output']
+        return output
+
     # ==================== Session Management ====================
 
     def initialize_task(self, sample: "AppWorldSample", experiment_name: str = "default_experiment") -> dict:

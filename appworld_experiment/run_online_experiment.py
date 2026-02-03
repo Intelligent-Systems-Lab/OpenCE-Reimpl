@@ -122,8 +122,11 @@ def main() -> None:
     max_interaction_steps = int(os.getenv("MAX_INTERACTION_STEPS", "5"))
     max_refinement_rounds = int(os.getenv("MAX_REFINEMENT_ROUNDS", "1"))
 
+    # Create environment with logger
+    environment = AppWorldEnvironment(base_url=appworld_url, logger=logger)
+
     # Load dataset
-    dataset = AppWorldDataset(os.getenv("APPWORLD_DATA_PATH", "None"))
+    dataset = AppWorldDataset(os.getenv("APPWORLD_DATA_PATH", "None"), env=environment)
     all_samples: List[AppWorldSample] = dataset.load_samples(split=args.split)
 
     # Limit samples if specified
@@ -135,7 +138,7 @@ def main() -> None:
         logger.info(f"Filtered to {len(samples)} samples for specified tasks (out of {len(all_samples)})")
     else:
         samples = all_samples
-
+    
     # Log configuration
     config = ExperimentConfig(
         experiment_name=experiment_name,
@@ -177,9 +180,6 @@ def main() -> None:
         dedup_frequency=args.dedup_frequency,
         logger=logger,
     )
-
-    # Create environment with logger
-    environment = AppWorldEnvironment(base_url=appworld_url, logger=logger)
 
     logger.info("=" * 60)
     logger.info("ONLINE ADAPTATION EXPERIMENT")

@@ -140,8 +140,11 @@ def main() -> None:
     epochs = args.epochs
     max_samples = args.max_samples
 
+    # Create environment with logger
+    environment = AppWorldEnvironment(base_url=appworld_url, logger=logger)
+
     # Load dataset - train split for training, test split for evaluation
-    dataset = AppWorldDataset(os.getenv("APPWORLD_DATA_PATH", "None"))
+    dataset = AppWorldDataset(os.getenv("APPWORLD_DATA_PATH", "None"), env=environment)
     train_samples: List[Sample] = dataset.load_samples(split=args.split)
     test_samples: List[Sample] = dataset.load_samples(split=args.split)
 
@@ -192,9 +195,6 @@ def main() -> None:
         dedup_frequency=args.dedup_frequency,
         logger=logger,
     )
-
-    # Create environment with logger
-    environment = AppWorldEnvironment(base_url=appworld_url, logger=logger)
 
     logger.info("=" * 60)
     logger.info("OFFLINE ADAPTATION EXPERIMENT")
