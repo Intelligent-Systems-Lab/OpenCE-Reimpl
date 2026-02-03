@@ -116,7 +116,7 @@ def main() -> None:
     max_interaction_steps = args.max_interaction_steps
 
     # Load dataset - train split for training, test split for evaluation
-    dataset = AppWorldDataset(os.getenv("APPWORLD_DATA_PATH", "/home/yanhong/appworld-server/data"))
+    dataset = AppWorldDataset(os.getenv("APPWORLD_DATA_PATH", "None"))
     samples: List[Sample] = dataset.load_samples(split=args.split)
 
     if args.max_samples is not None:

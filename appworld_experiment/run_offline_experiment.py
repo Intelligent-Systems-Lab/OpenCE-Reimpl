@@ -141,7 +141,7 @@ def main() -> None:
     max_samples = args.max_samples
 
     # Load dataset - train split for training, test split for evaluation
-    dataset = AppWorldDataset(os.getenv("APPWORLD_DATA_PATH", "/home/yanhong/appworld-server/data"))
+    dataset = AppWorldDataset(os.getenv("APPWORLD_DATA_PATH", "None"))
     train_samples: List[Sample] = dataset.load_samples(split=args.split)
     test_samples: List[Sample] = dataset.load_samples(split=args.split)
 

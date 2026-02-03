@@ -189,7 +189,7 @@ def main() -> None:
     appworld_url = args.appworld_url
 
     # Dataset path from environment variable
-    dataset_path = os.getenv("APPWORLD_DATA_PATH", "/home/yanhong/appworld-server/data")
+    dataset_path = os.getenv("APPWORLD_DATA_PATH", "None")
 
     # Initialize dataset
     dataset = AppWorldDataset(dataset_path)

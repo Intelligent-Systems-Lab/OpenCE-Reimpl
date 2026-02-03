@@ -123,7 +123,7 @@ def main() -> None:
     max_refinement_rounds = int(os.getenv("MAX_REFINEMENT_ROUNDS", "1"))
 
     # Load dataset
-    dataset = AppWorldDataset("/home/yanhong/appworld-server/data")
+    dataset = AppWorldDataset(os.getenv("APPWORLD_DATA_PATH", "None"))
     all_samples: List[AppWorldSample] = dataset.load_samples(split=args.split)
 
     # Limit samples if specified
