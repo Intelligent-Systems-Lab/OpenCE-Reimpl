@@ -64,6 +64,12 @@ def parse_args() -> argparse.Namespace:
         help="AppWorld API server URL (default from .env)",
     )
     parser.add_argument(
+        "--dedup-base-url",
+        type=str,
+        default=os.getenv("DEDUP_BASE_URL", "http://localhost:11434"),
+        help="Base URL for deduplication model (default from .env)",
+    )
+    parser.add_argument(
         "--deduplication-model",
         type=str,
         default=os.getenv("DEDUPLICATION_MODEL", "all-MiniLM-L6-v2"),
@@ -176,7 +182,7 @@ def main() -> None:
         curator=curator,
         max_refinement_rounds=max_refinement_rounds,
         max_interaction_steps=max_interaction_steps,
-        deduplicator=OllamaDeduplicator(logger=logger, model_name=args.deduplication_model) if args.dedup_frequency > 0 else None,
+        deduplicator=OllamaDeduplicator(logger=logger, base_url=args.dedup_base_url, model_name=args.deduplication_model) if args.dedup_frequency > 0 else None,
         dedup_frequency=args.dedup_frequency,
         logger=logger,
     )
