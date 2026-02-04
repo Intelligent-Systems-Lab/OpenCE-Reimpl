@@ -25,11 +25,9 @@ for candidate in (SRC, ROOT):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-from src.opence.methods.ace import (
-    Playbook,
-    Sample,
-    OpenAIClient
-)
+from src.opence.models.clients import OpenAIClient
+
+from appworld_experiment.appworld_playbook import Playbook
 from appworld_experiment.appworld_deduplication import OllamaDeduplicator
 from appworld_experiment.appworld_adaptation import AppWorldOfflineAdapter
 from appworld_experiment.appworld_dataset import AppWorldDataset, AppWorldSample
@@ -151,8 +149,8 @@ def main() -> None:
 
     # Load dataset - train split for training, test split for evaluation
     dataset = AppWorldDataset(os.getenv("APPWORLD_DATA_PATH", "None"), env=environment)
-    train_samples: List[Sample] = dataset.load_samples(split=args.split)
-    test_samples: List[Sample] = dataset.load_samples(split=args.split)
+    train_samples: List[AppWorldSample] = dataset.load_samples(split=args.split)
+    test_samples: List[AppWorldSample] = dataset.load_samples(split=args.split)
 
     if max_samples is not None:
         train_samples = train_samples[:max_samples]

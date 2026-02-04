@@ -15,7 +15,7 @@ from typing import Iterable, List, Optional, Sequence, TYPE_CHECKING
 import re
 import json
 
-from src.opence.methods.ace.adaptation import (
+from appworld_experiment.base_ace.adaptation import (
     AdapterBase,
     AdapterStepResult,
     EnvironmentResult,
@@ -23,7 +23,7 @@ from src.opence.methods.ace.adaptation import (
     TaskEnvironment,
 )
 from appworld_experiment.appworld_deduplication import OllamaDeduplicator
-from src.opence.methods.ace.playbook import Playbook
+from appworld_experiment.appworld_playbook import Playbook
 from appworld_experiment.appworld_roles import (
     AppWorldGenerator,
     AppWorldReflector,
@@ -561,8 +561,8 @@ class AppWorldAdapterBase(AdapterBase):
 
         # Return result without reflection/curator outputs
         # Create dummy reflection and curator outputs for compatibility
-        from src.opence.methods.ace.roles import ReflectorOutput, CuratorOutput
-        from src.opence.methods.ace.playbook import DeltaBatch
+        from appworld_experiment.base_ace.roles import ReflectorOutput, CuratorOutput
+        from appworld_experiment.base_ace.delta import DeltaBatch
 
         dummy_reflection = ReflectorOutput(
             reasoning="(Evaluation mode - no reflection)",
@@ -603,7 +603,7 @@ class AppWorldOfflineAdapter(AppWorldAdapterBase):
             AppWorldGenerator, AppWorldReflector, AppWorldCurator
         )
         from opence.models.clients import OpenAIClient
-        from opence.methods.ace import Playbook
+        from appworld_experiment.appworld_playbook import Playbook
 
         llm = OpenAIClient(model="gpt-4")
         adapter = AppWorldOfflineAdapter(

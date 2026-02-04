@@ -36,7 +36,7 @@ from typing import Any, Optional, Dict, List, Sequence, TYPE_CHECKING
 import re
 
 from src.opence.models.clients import LLMClient
-from src.opence.methods.ace.roles import (
+from appworld_experiment.base_ace.roles import (
     Generator,
     Reflector,
     Curator,
@@ -47,7 +47,7 @@ from src.opence.methods.ace.roles import (
     _format_optional,
     _safe_json_loads,
 )
-from src.opence.methods.ace.playbook import Playbook, Bullet
+from appworld_experiment.appworld_playbook import Playbook, Tip
 from .appworld_prompts import (
     APPWORLD_GENERATOR_PROMPT,
     APPWORLD_REFLECTOR_PROMPT,
@@ -182,18 +182,18 @@ def _markdown_parser(md_text: str, schema: dict) -> dict:
 
     return final_result
 
-def _bullet_as_prompt(bullets: Bullet) -> str:
-    """Format a Bullet object as a prompt string for inclusion in LLM prompts.
+def _tips_as_prompt(tips: List[Tip]) -> str:
+    """Format a Tip object as a prompt string for inclusion in LLM prompts.
 
     Args:
-        bullet: Bullet object to format
+        tips: List of Tip objects to format
 
     Returns:
-        Formatted string representation of the bullet
+        Formatted string representation of the tips
     """
     prompts = ""
-    for bullet in bullets:
-        prompts += f"- Section: {bullet.section}\n  ID: {bullet.id}\n  Content: {bullet.content}\n"
+    for tip in tips:
+        prompts += f"- Section: {tip.section}\n  ID: {tip.id}\n  Content: {tip.content}\n"
 
     return prompts if prompts else "empty playbook"
 
@@ -465,7 +465,7 @@ class AppWorldReflector(Reflector):
     def reflect(
         self,
         *,
-        playbook: List[Bullet],
+        playbook: List[Tip],
         question_context: str,
         feedback: Optional[str],
         unit_test_results: Optional[str] = None,
@@ -491,7 +491,7 @@ class AppWorldReflector(Reflector):
         base_prompt = self.prompt_template.format(
             question_context=question_context,
             unit_test_results=_format_optional(unit_test_results),
-            playbook=_bullet_as_prompt(playbook) or "(empty playbook)",
+            playbook=_tips_as_prompt(playbook) or "(empty playbook)",
             full_trajectory=_format_optional(feedback),
         )
 
@@ -665,7 +665,7 @@ class AppWorldCurator(Curator):
         Returns:
             CuratorOutput containing delta operations
         """
-        from src.opence.methods.ace.delta import DeltaBatch
+        from appworld_experiment.base_ace.delta import DeltaBatch
 
         # Format prompt with AppWorld-specific parameters
         base_prompt = self.prompt_template.format(

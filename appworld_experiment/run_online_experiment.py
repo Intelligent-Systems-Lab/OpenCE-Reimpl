@@ -17,10 +17,9 @@ for candidate in (SRC, ROOT):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-from src.opence.methods.ace import (
-    Playbook,
-    OpenAIClient
-)
+from src.opence.models.clients import OpenAIClient
+
+from appworld_experiment.appworld_playbook import Playbook
 from appworld_experiment.appworld_dataset import AppWorldDataset, AppWorldSample
 from appworld_experiment.appworld_environment import AppWorldEnvironment
 from appworld_experiment.appworld_adaptation import AppWorldOnlineAdapter

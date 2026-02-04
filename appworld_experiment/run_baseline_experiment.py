@@ -25,12 +25,8 @@ for candidate in (SRC, ROOT):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-from src.opence.methods.ace import (
-    Playbook,
-    Sample,
-    OpenAIClient
-)
-from appworld_experiment.appworld_deduplication import OllamaDeduplicator
+from appworld_experiment.base_ace.adaptation import Sample
+from src.opence.models.clients import OpenAIClient
 from appworld_experiment.appworld_adaptation import AppworldBaselineAdapter
 from appworld_experiment.appworld_dataset import AppWorldDataset, AppWorldSample
 from appworld_experiment.appworld_environment import AppWorldEnvironment

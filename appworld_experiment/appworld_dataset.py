@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
-from src.opence.methods.ace.adaptation import Sample
+from appworld_experiment.base_ace.adaptation import Sample
 from appworld_experiment.appworld_environment import AppWorldEnvironment
 
 # Fallback logger

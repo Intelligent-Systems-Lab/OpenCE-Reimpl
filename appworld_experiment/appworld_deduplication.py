@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, List, Optional, TYPE_CHECKING
-from src.opence.methods.ace.deduplication import Deduplicator
+from appworld_experiment.base_ace.deduplication import Deduplicator
 
 if TYPE_CHECKING:
     from appworld_experiment.experiment_logger import ExperimentLogger
